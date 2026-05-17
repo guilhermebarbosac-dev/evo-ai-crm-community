@@ -164,32 +164,6 @@ reads consumer data on its behalf.
 **Breaking-change policy:** renaming `register` / `exportable_tables_for_scope`,
 or changing the shape of the returned entries, is a major bump.
 
-### 5. `data_export`
-
-**Version:** `1.0.0`
-**Default:** registers nothing; `exportable_tables_for_tenant(tenant_id)`
-returns `[]`.
-
-```ruby
-EvoExtensionPoints::DataExport.register(name: :widgets) do |tenant_id|
-  Widget.where(tenant_id: tenant_id)
-end
-
-EvoExtensionPoints::DataExport.exportable_tables_for_tenant(tenant_id)
-# => [{ name: :widgets, records: <enumerable> }]
-```
-
-The contract is a dynamic registry: an external consumer registers one
-or more named scope blocks at boot, each block receiving a `tenant_id`
-and returning an enumerable of records (or a query-like object the
-caller can iterate). The community release ships with no registrations;
-in standalone mode the registry is empty and the export is a no-op.
-
-**Breaking-change policy:** renaming `register`,
-`exportable_tables_for_tenant` or the `Entry` shape (`{ name:, records:
-}`) is a major bump. Adding new optional fields to the returned entry
-hash is a minor bump.
-
 ---
 
 ## How to use as a consumer
@@ -224,7 +198,7 @@ end
 
 A consumer is expected to declare the community version range it
 supports in its own package metadata (gemspec / `package.json` /
-`go.mod`). A CI workflow (`extension-points-contract`) runs a neutral
+`go.mod`). A CI workflow (`community-with-extension-consumer-stub`) runs a neutral
 consumer stub against every community PR, failing the build on a
 contract break.
 
