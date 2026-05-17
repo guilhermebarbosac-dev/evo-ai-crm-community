@@ -42,6 +42,8 @@ gem 'gmail_xoauth'
 gem 'net-smtp', '~> 0.3.4'
 # Prevent CSV injection
 gem 'csv-safe'
+# Read/write ZIP bundles for the templates feature
+gem 'rubyzip', '~> 2.3'
 
 ##-- MCP (Model Context Protocol) Integration --##
 # gem 'fast-mcp', '~> 1.5.0'  # Removed - MCP not needed
@@ -211,6 +213,15 @@ group :test do
   gem 'webmock'
   # test profiling
   gem 'test-prof'
+end
+
+# CI-only group: loads the neutral extension consumer stub fixture under
+# spec/support/extension_consumer_stub/ when
+# BUNDLE_WITH=extension_consumer_stub. Used by
+# .github/workflows/community-with-extension-consumer-stub.yml to verify
+# that the EvoExtensionPoints contract has not regressed.
+group :extension_consumer_stub do
+  gem 'extension_consumer_stub', path: 'spec/support/extension_consumer_stub'
 end
 
 group :development, :test do

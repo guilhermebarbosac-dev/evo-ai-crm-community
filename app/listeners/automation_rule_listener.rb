@@ -1,78 +1,22 @@
 class AutomationRuleListener < BaseListener
+  PIPELINE_STAGE_DEDUP_WINDOW = (ENV.fetch('AUTOMATION_PIPELINE_STAGE_DEDUP_WINDOW_SECONDS', 5).to_i)
+
   def conversation_updated(event)
-    return if performed_by_automation?(event)
-
-    conversation = event.data[:conversation]
-    account = nil
-    changed_attributes = event.data[:changed_attributes]
-
-    return unless rule_present?('conversation_updated', account)
-
-    rules = current_account_rules('conversation_updated', account)
-
-    rules.each do |rule|
-      conditions_match = ::AutomationRules::ConditionsFilterService.new(rule, conversation, { changed_attributes: changed_attributes }).perform
-      next unless conditions_match.present?
-      
-      if rule.mode == 'flow' && rule.flow_data.present?
-        AutomationRules::FlowExecutionService.new(rule, account, conversation).perform
-      else
-        AutomationRules::ActionService.new(rule, account, conversation).perform
-      end
-    end
+    process_conversation_event(event, 'conversation_updated')
   end
 
   def conversation_created(event)
-    return if performed_by_automation?(event)
-
-    conversation = event.data[:conversation]
-    account = nil
-    changed_attributes = event.data[:changed_attributes]
-
-    return unless rule_present?('conversation_created', account)
-
-    rules = current_account_rules('conversation_created', account)
-
-    rules.each do |rule|
-      conditions_match = ::AutomationRules::ConditionsFilterService.new(rule, conversation, { changed_attributes: changed_attributes }).perform
-      next unless conditions_match.present?
-      
-      if rule.mode == 'flow' && rule.flow_data.present?
-        AutomationRules::FlowExecutionService.new(rule, account, conversation).perform
-      else
-        ::AutomationRules::ActionService.new(rule, account, conversation).perform
-      end
-    end
+    process_conversation_event(event, 'conversation_created')
   end
 
   def conversation_opened(event)
-    return if performed_by_automation?(event)
-
-    conversation = event.data[:conversation]
-    account = nil
-    changed_attributes = event.data[:changed_attributes]
-
-    return unless rule_present?('conversation_opened', account)
-
-    rules = current_account_rules('conversation_opened', account)
-
-    rules.each do |rule|
-      conditions_match = ::AutomationRules::ConditionsFilterService.new(rule, conversation, { changed_attributes: changed_attributes }).perform
-      next unless conditions_match.present?
-      
-      if rule.mode == 'flow' && rule.flow_data.present?
-        AutomationRules::FlowExecutionService.new(rule, account, conversation).perform
-      else
-        AutomationRules::ActionService.new(rule, account, conversation).perform
-      end
-    end
+    process_conversation_event(event, 'conversation_opened')
   end
 
   def message_created(event)
-    message = event.data[:message]
-
     return if ignore_message_created_event?(event)
 
+    message = event.data[:message]
     account = nil
     changed_attributes = event.data[:changed_attributes]
 
@@ -81,15 +25,14 @@ class AutomationRuleListener < BaseListener
     rules = current_account_rules('message_created', account)
 
     rules.each do |rule|
-      conditions_match = ::AutomationRules::ConditionsFilterService.new(rule, message.conversation,
-                                                                        { message: message, changed_attributes: changed_attributes }).perform
-      next unless conditions_match.present?
-      
-      if rule.mode == 'flow' && rule.flow_data.present?
-        AutomationRules::FlowExecutionService.new(rule, account, message.conversation).perform
-      else
-        ::AutomationRules::ActionService.new(rule, account, message.conversation).perform
-      end
+      evaluate_and_execute_rule(
+        rule: rule,
+        conversation: message&.conversation,
+        account: account,
+        changed_attributes: changed_attributes,
+        message: message,
+        payload: { message_id: message&.id, conversation_id: message&.conversation_id, changed_attributes: changed_attributes }
+      )
     end
   end
 
@@ -97,24 +40,42 @@ class AutomationRuleListener < BaseListener
     return if performed_by_automation?(event)
 
     pipeline_item = event.data[:pipeline_item]
-    conversation = pipeline_item.conversation
+    conversation = pipeline_item&.conversation
     account = nil
     changed_attributes = event.data[:changed_attributes] || build_default_changed_attributes(pipeline_item)
+
+    Rails.logger.info "[AutomationRuleListener] pipeline_stage_updated received: pipeline_item=#{pipeline_item&.id} conversation=#{conversation&.id} changed_attributes=#{changed_attributes.inspect}"
 
     return unless rule_present?('pipeline_stage_updated', account)
 
     rules = current_account_rules('pipeline_stage_updated', account)
+    current_stage_id = pipeline_item&.pipeline_stage_id
 
     rules.each do |rule|
-      conditions_match = ::AutomationRules::ConditionsFilterService.new(rule, conversation, { changed_attributes: changed_attributes }).perform
-      next unless conditions_match.present?
-      
-      if rule.mode == 'flow' && rule.flow_data.present?
-        AutomationRules::FlowExecutionService.new(rule, account, conversation).perform
-      else
-        AutomationRules::ActionService.new(rule, account, conversation).perform
+      if pipeline_item_rule_recently_fired?(rule.id, pipeline_item&.id, current_stage_id)
+        Rails.logger.info "[AutomationRuleListener] rule #{rule.id} skipped (dedup): pipeline_item=#{pipeline_item&.id} stage=#{current_stage_id} already fired in last #{PIPELINE_STAGE_DEDUP_WINDOW}s"
+        record_dedup_skip(rule, pipeline_item, current_stage_id, changed_attributes)
+        next
       end
+
+      evaluate_and_execute_rule(
+        rule: rule,
+        conversation: conversation,
+        account: account,
+        changed_attributes: changed_attributes,
+        payload: { pipeline_item_id: pipeline_item&.id, conversation_id: conversation&.id, changed_attributes: changed_attributes }
+      )
+
+      mark_pipeline_item_rule_fired(rule.id, pipeline_item&.id, current_stage_id)
     end
+  end
+
+  def conversation_resolved(event)
+    process_conversation_event(event, 'conversation_resolved')
+  end
+
+  def conversation_status_changed(event)
+    process_conversation_event(event, 'conversation_status_changed')
   end
 
   def contact_created(event)
@@ -242,6 +203,109 @@ class AutomationRuleListener < BaseListener
   end
 
   private
+
+  def record_dedup_skip(rule, pipeline_item, stage_id, changed_attributes)
+    recorder = ::AutomationRules::RunRecorder.new(
+      rule: rule,
+      event_name: 'pipeline_stage_updated',
+      payload: { pipeline_item_id: pipeline_item&.id, stage_id: stage_id, changed_attributes: changed_attributes }
+    )
+    recorder.add_step('Event received', data: { event_name: 'pipeline_stage_updated', changed_attributes: changed_attributes })
+    recorder.skipped!("Duplicate event for pipeline_item=#{pipeline_item&.id} stage=#{stage_id} within #{PIPELINE_STAGE_DEDUP_WINDOW}s window")
+    recorder.persist!
+  end
+
+  def pipeline_stage_dedup_key(rule_id, pipeline_item_id, stage_id)
+    "automation:pipeline_stage_updated:#{rule_id}:#{pipeline_item_id}:#{stage_id}"
+  end
+
+  def pipeline_item_rule_recently_fired?(rule_id, pipeline_item_id, stage_id)
+    return false if pipeline_item_id.blank? || stage_id.blank?
+
+    Rails.cache.exist?(pipeline_stage_dedup_key(rule_id, pipeline_item_id, stage_id))
+  end
+
+  def mark_pipeline_item_rule_fired(rule_id, pipeline_item_id, stage_id)
+    return if pipeline_item_id.blank? || stage_id.blank?
+
+    Rails.cache.write(
+      pipeline_stage_dedup_key(rule_id, pipeline_item_id, stage_id),
+      true,
+      expires_in: PIPELINE_STAGE_DEDUP_WINDOW.seconds
+    )
+  end
+
+  def process_conversation_event(event, event_name)
+    return if performed_by_automation?(event)
+
+    conversation = event.data[:conversation]
+    account = nil
+    changed_attributes = event.data[:changed_attributes]
+
+    return unless rule_present?(event_name, account)
+
+    rules = current_account_rules(event_name, account)
+
+    rules.each do |rule|
+      evaluate_and_execute_rule(
+        rule: rule,
+        conversation: conversation,
+        account: account,
+        changed_attributes: changed_attributes,
+        payload: { conversation_id: conversation&.id, changed_attributes: changed_attributes }
+      )
+    end
+  end
+
+  def evaluate_and_execute_rule(rule:, conversation:, account:, changed_attributes:, payload: {}, message: nil, contact: nil)
+    recorder = ::AutomationRules::RunRecorder.new(rule: rule, event_name: rule.event_name, payload: payload)
+    recorder.add_step('Event received', data: { event_name: rule.event_name, changed_attributes: changed_attributes })
+
+    if conversation.nil?
+      recorder.skipped!('No conversation linked to event (pipeline_item without conversation, etc.)')
+      recorder.persist!
+      return
+    end
+
+    options = { changed_attributes: changed_attributes }
+    options[:message] = message if message
+    options[:contact] = contact if contact
+
+    conditions_match = ::AutomationRules::ConditionsFilterService.new(rule, conversation, options).perform
+    recorder.add_step(
+      'Conditions evaluated',
+      level: conditions_match ? 'success' : 'info',
+      data: { matched: !!conditions_match, conditions: rule.conditions }
+    )
+
+    unless conditions_match
+      recorder.no_match!
+      recorder.persist!
+      return
+    end
+
+    if rule.mode == 'flow' && rule.flow_data.present?
+      recorder.add_step('Executing flow', data: { mode: 'flow' })
+      AutomationRules::FlowExecutionService.new(rule, account, conversation).perform
+    else
+      Array(rule.actions).each do |action|
+        action_hash = action.respond_to?(:to_h) ? action.to_h : action
+        recorder.add_step(
+          "Action: #{action_hash['action_name'] || action_hash[:action_name]}",
+          level: 'success',
+          data: { params: action_hash['action_params'] || action_hash[:action_params] }
+        )
+      end
+      AutomationRules::ActionService.new(rule, account, conversation).perform
+    end
+
+    recorder.matched!
+    recorder.persist!
+  rescue StandardError => e
+    Rails.logger.error "[AutomationRuleListener] evaluate_and_execute_rule failed rule=#{rule&.id}: #{e.class}: #{e.message}"
+    recorder.error!(e)
+    recorder.persist!
+  end
 
   def build_default_changed_attributes(pipeline_item)
     {

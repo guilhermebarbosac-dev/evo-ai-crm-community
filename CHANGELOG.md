@@ -19,6 +19,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - N/A
 
+## [v1.0.0-rc3] - 2026-05-17
+
+Release de estabilização — concentra correções de bugs em paridade de payload com Evolution Go (botões/listas), entrega de mídia outbound, hardening do endpoint Notificame verify, filtragem de secrets em logs Rails, bulk actions, escopo IDOR e diversas correções de automation rules. Também consolida a fundação do open-core via `EXTENSION_POINTS.md` + `lib/evo_extension_points/` (módulos no-op), introduz catálogo de products com variantes + venda em pipeline, export/import de bundles de templates (EVO-1116) e endpoint para limpar configurações de admin por tipo.
+
+### Added
+
+- **Catálogo de Products** — modelo completo de products com variantes, attach a agentes via tab dedicada e venda integrada ao pipeline (panel de vendas no item de pipeline).
+- **Template Bundles — export & import (EVO-1116)** — exportação e importação de configuração via bundle ZIP. Permite empacotar inboxes, agentes, automation rules, canned responses e templates em um único arquivo portável entre instalações.
+- **EVO-1051 — `DELETE` endpoint para limpar admin config por tipo** — operador da instalação pode resetar configurações específicas (SMTP, Storage, etc.) sem ter de editar o banco.
+- **EVO-1287 — CI guard-rail para o contrato `EvoExtensionPoints`** (#76) — workflow que falha o PR se módulos do `lib/evo_extension_points/` forem modificados sem revisão consciente. Garante que a Enterprise edition continue podendo injetar implementações sem precisar de fork.
+- **EVO-1286 — `lib/evo_extension_points/` com 5 módulos no-op** (#75) — pontos de extensão declarados como módulos no-op, prontos para serem reabertos pela Enterprise. Contrato versionado em `EXTENSION_POINTS.md`.
+- **EVO-1283 — `EXTENSION_POINTS.md`** (#73) — documento declarando 4 hooks versionados expostos pelo CRM como contrato público de extensão.
+- **EVO-1058** — operador `attribute_changed` em labels com dedup de dispatch (#56). Automation rules passam a reagir a mudanças de atribuição de label sem disparar duas vezes para o mesmo evento.
+- **EVO-1057** — listeners para `conversation_resolved` e `conversation_status_changed` (#53). Amplia o vocabulário de triggers do automation rules para cobrir mudanças de status da conversa.
+- **EVO-1011 — Bulk actions** — collect de resultados por item e resposta com `success_ids` / `failed_ids`, suporte a resolve em massa de conversas via checkbox.
+- **Pipelines — `move_to_pipeline` action** — automation rules ganham ação para mover conversa entre pipelines preservando o id do item. Inclui dedup de `pipeline_stage_updated` em janela de 5s por `(rule, pipeline_item, stage)` para evitar tempestade de eventos.
+- **Inboxes — expansão de variáveis em message templates** — variáveis ganham campos adicionais (`label`, `source`, `example`, `position`, `component`) acessíveis no template.
+- **Automation rule runs — gerenciamento + cleanup job** — endpoint de API para consultar histórico de execução de regras + job de limpeza periódica.
+- **Action service** — novos métodos `send_canned_response` e `send_template` no `ActionService` (uso direto pelas automations).
+- **Spec de regressão** — `pipeline_item_spec` para fluxo de auto-assign-and-move (EVO-1080) (#57).
+- **Spec de regressão** — Notificame verify endpoint (EVO-986).
+- **Spec de regressão** — exclusão de contato com attachments (EVO-973) (#46).
+- **Spec de contrato** — `Webhooks::Trigger` e endurecimento do spec de macros (EVO-1041).
+
+### Changed
+
+- **EVO-1113 — Consolidação de resolução de credenciais no `EvolutionConcern`** — antes a lógica estava espalhada por providers; agora um único concern centraliza o fallback per-field para `api_url`, `admin_token` e demais credenciais Evolution. Reduz superfície de bug e facilita troca entre Evolution API e Evolution Go.
+- **Docs** padronizados para Evolution Foundation 2026 (README, LICENSE, NOTICE, TRADEMARKS).
+- **Docs (org)** — URLs do GitHub atualizadas de `EvolutionAPI` para `evolution-foundation`.
+- **Schema** — comments atualizados em `automation_rule_run`, `role` e `user_role`.
+- **Schema** — removidas tabelas e foreign keys não utilizadas.
+
+### Fixed
+
+#### Mensageria — Evolution Go / Evolution API
+- **EVO-1115 — payload de buttons/lists para Evolution Go** (#72) — formato corrigido para paridade com Evolution Go. Mensagens interativas (botões e listas) chegavam malformadas; agora seguem o schema esperado por ambos os providers.
+- **EVO-1151 — falha de entrega de mídia outbound** (#70) — corrigido para Evolution API e Evolution Go. Anexos de outgoing não chegavam ao destinatário em determinados cenários de tamanho/codec.
+- **Mensagens duplicadas no incoming handler do Evolution Go** — handler agora deduplica eventos antes de criar a conversa.
+- **Fallback de configuração Evolution** — `api_url` e `admin_token` agora caem para o `GlobalConfig` quando a configuração por inbox está vazia.
+
+#### Notificame / Webhooks
+- **EVO-986 — Notificame verify endpoint hardening** — auth obrigatório, validação de payload, sem error leakage. Endpoint anterior expunha detalhes de erro úteis para enumeração.
+- **EVO-1041 — Macro webhook delivery failures** — falhas em webhooks de macro agora são surfaceadas (antes ficavam silenciosas). Restrito o re-raise a `:macro_webhook` para evitar retry storm em outros tipos. Wired correto através de `ExecutionService` → `WebhookJob`.
+
+#### Automation rules
+- **EVO-1130 — Notificame attachment fallback_title** (#69) — prefere `content[:fileName]` quando disponível para gerar o título do anexo.
+- **EVO-1049 — BMS/Resend delivery method** (#66) — corrigida resolução do símbolo do delivery method para a classe correta.
+- **EVO-1011 — Bulk actions** — fix das findings HIGH de review (round 2 e 3), spec de fixture com `pipeline_type` válido (EVO-1047).
+- **`labels` condition** — agora usa `EXISTS` subquery (independente e NULL-safe), resolve UUIDs para títulos com fallback, e casa label em conversation OU contact.
+- **`message_type` filter** — aceita valores numéricos, não só keys de enum.
+- **`apply_label` action** — resolve UUIDs para titles antes de tagear.
+- **`pipeline_stage_updated`** — dedup em janela de 5s por `(rule, pipeline_item, stage)` evita disparo em rajada.
+- **Cross-pipeline stage movement** — bypass correto da validação `same-pipeline` quando a action é `move_to_pipeline`.
+- **Action templates** — `send_template` usa `deep_stringify_keys`, parâmetros melhorados.
+- **`MessageTemplateVariable`** — definido localmente para evitar quebra de build.
+- **Diagnostic logging** — adicionado em `move_to_pipeline` e `pipeline_stage_updated` para investigação de issues em produção.
+
+#### Contacts / Pipeline
+- **EVO-1018 — Group contacts** — distingue contatos de grupo WhatsApp de contatos reais de cliente; review feedback aplicado.
+
+#### Mídia (EVO-999)
+- **HIGH review findings** aplicadas para os fixes de mídia: fallback de `video file_type`, `fallback_title` em attachments, todos os caminhos de download cobertos.
+
+#### Estabilidade
+- **Docker — bundler version** — fixada durante installation para evitar build não-determinístico.
+- **EVO-1047** — `pipeline_item_spec` usa `pipeline_type` válido na fixture (antes quebrava o spec).
+
+### Security
+
+- **EVO-1111 — Filtragem de secrets nos logs Rails** — campos sensíveis (`password`, `token`, `api_key`, etc.) passam pelo filter parameters do Rails antes de chegar ao log. Antes era possível vazar credenciais em logs de erro/debug.
+- **EVO-1084 — IDOR scope no `BulkActionsJob`** — escopo de account aplicado no job; antes era possível, com um ID válido de outra conta, manipular recursos cross-tenant.
+- **EVO-986 — Notificame verify endpoint** — auth obrigatório + validação fechada + sem error leakage (ver Fixed).
+
 ## [v1.0.0-rc2] - 2026-05-05
 
 Release de estabilização — concentra correções de `500 Internal Server Error` em endpoints REST, fixes do fluxo Evolution Go, automation rules por stage, navegação card → conversation, performance de pipeline, migrations idempotentes para deploys em schemas drifted, RBAC de `super_admin` reconhecido como administrator em todos os bypasses, e signed URLs S3 para buckets privados em ambos os providers WhatsApp.
@@ -117,6 +190,7 @@ Quatro migrations tornadas seguras para re-run em PROD com schema drifted (ou pa
 
 ---
 
-[Unreleased]: https://github.com/EvolutionAPI/evo-ai-crm-community/compare/v1.0.0-rc2...HEAD
-[v1.0.0-rc2]: https://github.com/EvolutionAPI/evo-ai-crm-community/compare/v1.0.0-rc1...v1.0.0-rc2
+[Unreleased]: https://github.com/evolution-foundation/evo-ai-crm-community/compare/v1.0.0-rc3...HEAD
+[v1.0.0-rc3]: https://github.com/evolution-foundation/evo-ai-crm-community/compare/v1.0.0-rc2...v1.0.0-rc3
+[v1.0.0-rc2]: https://github.com/evolution-foundation/evo-ai-crm-community/compare/v1.0.0-rc1...v1.0.0-rc2
 [v1.0.0-rc1]: https://github.com/EvolutionAPI/evo-ai-crm-community/releases/tag/v1.0.0-rc1

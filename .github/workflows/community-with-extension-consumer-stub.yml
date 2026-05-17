@@ -1,0 +1,64 @@
+name: community-with-extension-consumer-stub
+
+on:
+  pull_request:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+env:
+  RAILS_ENV: test
+  ENCRYPTION_KEY: test-encryption-key-for-fernet!!
+  POSTGRES_HOST: localhost
+  POSTGRES_PORT: 5432
+  POSTGRES_USERNAME: postgres
+  POSTGRES_PASSWORD: postgres
+  POSTGRES_DATABASE: evolution_test
+
+jobs:
+  contract:
+    name: Verify EvoExtensionPoints contract (EXTENSION_POINTS.md ↔ API)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: evolution_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.4.4'
+          bundler-cache: true
+
+      - name: Prepare test database
+        run: bundle exec rails db:schema:load
+
+      - name: Run RSpec standalone (no consumer stub)
+        run: bundle exec rspec spec/lib/evo_extension_points_spec.rb spec/lib/evo_extension_points/
+
+      - name: Verify EXTENSION_POINTS.md matches live API
+        run: bundle exec rake evo_extension_points:check_contract
+
+      - name: Run RSpec with the neutral extension consumer stub mounted
+        env:
+          BUNDLE_WITH: extension_consumer_stub
+        run: |
+          bundle install
+          bundle exec rspec --require extension_consumer_stub \
+            spec/lib/evo_extension_points_spec.rb \
+            spec/lib/evo_extension_points/

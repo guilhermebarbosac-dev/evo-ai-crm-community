@@ -1,7 +1,25 @@
 # frozen_string_literal: true
 
-# Role model - synced from evo-auth-service
-# This model provides read-only access to roles managed by evo-auth-service
+# == Schema Information
+#
+# Table name: roles
+#
+#  id          :uuid             not null, primary key
+#  description :text
+#  key         :string           not null
+#  name        :string           not null
+#  system      :boolean          default(FALSE), not null
+#  type        :string(10)       default("user"), not null
+#  created_at  :datetime         not null
+#  updated_at  :datetime         not null
+#
+# Indexes
+#
+#  index_roles_on_key            (key) UNIQUE
+#  index_roles_on_name           (name) UNIQUE
+#  index_roles_on_type           (type)
+#  index_roles_on_type_and_name  (type,name) UNIQUE
+#
 class Role < ApplicationRecord
   # Evolution Reference Model - managed by evo-auth-service
   # This model serves only as a reference to sync data from evo-auth-service

@@ -41,6 +41,9 @@ class PipelineItem < ApplicationRecord
 
   has_many :stage_movements, dependent: :destroy
   has_many :tasks, class_name: 'PipelineTask', dependent: :destroy
+  has_many :pipeline_item_products, dependent: :destroy
+  has_many :products, through: :pipeline_item_products
+  has_many :product_variants, through: :pipeline_item_products
 
   validates :conversation_id, uniqueness: { scope: :pipeline_id }, allow_nil: true
   validates :contact_id, uniqueness: { scope: :pipeline_id }, allow_nil: true
@@ -50,6 +53,7 @@ class PipelineItem < ApplicationRecord
   before_save :normalize_services_data!
   after_create :create_entry_movement
   after_create :publish_pipeline_item_created
+  after_create :dispatch_initial_stage_event
   after_update :create_stage_change_movement, if: :saved_change_to_pipeline_stage_id?
   after_update :publish_pipeline_item_updated
   after_update :publish_pipeline_item_completed, if: :saved_change_to_completed_at?
@@ -301,12 +305,21 @@ class PipelineItem < ApplicationRecord
     old_stage_id = pipeline_stage_id_previously_was
     old_stage = PipelineStage.find_by(id: old_stage_id)
 
-    stage_movements.create!(
-      from_stage: old_stage,
-      to_stage: pipeline_stage,
-      moved_by: Current.user,
-      movement_type: 'manual'
-    )
+    # Cross-pipeline moves are recorded by the caller (e.g.
+    # Pipelines::StageAutomationService#move_to_pipeline) with a
+    # `cross_pipeline` movement_type that bypasses the same-pipeline
+    # validation. Creating a `manual` movement here would otherwise hit
+    # `stages_belong_to_same_pipeline` and roll the update back.
+    cross_pipeline_change = old_stage && old_stage.pipeline_id != pipeline_stage.pipeline_id
+
+    unless cross_pipeline_change
+      stage_movements.create!(
+        from_stage: old_stage,
+        to_stage: pipeline_stage,
+        moved_by: Current.user,
+        movement_type: 'manual'
+      )
+    end
 
     # Trigger automation event for pipeline stage update
     Rails.configuration.dispatcher.dispatch(
@@ -314,6 +327,15 @@ class PipelineItem < ApplicationRecord
       Time.zone.now,
       pipeline_item: self,
       changed_attributes: { 'pipeline_stage_id' => [old_stage_id, pipeline_stage_id] }
+    )
+  end
+
+  def dispatch_initial_stage_event
+    Rails.configuration.dispatcher.dispatch(
+      'pipeline_stage_updated',
+      Time.zone.now,
+      pipeline_item: self,
+      changed_attributes: { 'pipeline_stage_id' => [nil, pipeline_stage_id] }
     )
   end
 
@@ -368,5 +390,13 @@ class PipelineItem < ApplicationRecord
       Time.zone.now,
       pipeline_item: self
     )
+  end
+
+  public
+
+  # Sum of (quantity * locked_unit_price) across every linked product.
+  # Returns a Decimal so callers can format/round as they prefer.
+  def total_value
+    pipeline_item_products.sum('quantity * locked_unit_price')
   end
 end

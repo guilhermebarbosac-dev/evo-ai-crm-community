@@ -3,6 +3,14 @@ require 'json'
 class AutomationRules::ConditionsFilterService < FilterService
   ATTRIBUTE_MODEL = 'contact_attribute'.freeze
 
+  # Maps frontend attribute_key to the actual key present in changed_attributes.
+  # Conversation/Contact dispatch previous_changes directly, so labels (via
+  # acts-as-taggable) are stored as `label_list`. Without this alias the
+  # attribute_changed filter would never match label transitions.
+  ATTRIBUTE_KEY_ALIASES = {
+    'labels' => 'label_list'
+  }.freeze
+
   def initialize(rule, conversation = nil, options = {})
     super([], nil)
     @rule = rule
@@ -38,8 +46,16 @@ class AutomationRules::ConditionsFilterService < FilterService
 
     records = perform_attribute_changed_filter(records) if @attribute_changed_query_filter.any?
 
-    records.any?
+    matched = records.any?
+
+    Rails.logger.info(
+      "[ConditionsFilterService] rule=#{@rule&.id} event=#{@rule&.event_name} matched=#{matched} " \
+      "query=#{@query_string.inspect} filter_values=#{@filter_values.inspect} sql=#{records.to_sql rescue 'unavailable'}"
+    )
+
+    matched
   rescue StandardError => e
+    Rails.logger.error "[ConditionsFilterService] rule=#{@rule&.id} event=#{@rule&.event_name} error=#{e.class}: #{e.message} query=#{@query_string.inspect} filter_values=#{@filter_values.inspect}"
     EvolutionExceptionTracker.new(e).capture_exception
     false
   end
@@ -79,13 +95,67 @@ class AutomationRules::ConditionsFilterService < FilterService
   def filter_based_on_attribute_change(records, current_attribute_changed_record)
     @attribute_changed_query_filter.each do |filter|
       @changed_attributes = @changed_attributes.with_indifferent_access
-      changed_attribute = @changed_attributes[filter['attribute_key']].presence
+      backend_key = ATTRIBUTE_KEY_ALIASES.fetch(filter['attribute_key'], filter['attribute_key'])
+      changed_attribute = @changed_attributes[backend_key].presence
 
-      if changed_attribute[0].in?(filter['values']['from']) && changed_attribute[1].in?(filter['values']['to'])
+      # Skip silently when the watched attribute did not change in this update.
+      # Avoids NoMethodError on changed_attribute[0] which was being swallowed
+      # by the rescue in #perform, masking real bugs.
+      next unless changed_attribute.is_a?(Array) && changed_attribute.length >= 2
+
+      if attribute_changed_match?(filter, changed_attribute)
         @attribute_changed_records = attribute_changed_filter_query(filter, records, current_attribute_changed_record)
       end
       current_attribute_changed_record = @attribute_changed_records
     end
+  end
+
+  def attribute_changed_match?(filter, changed_attribute)
+    if filter['attribute_key'] == 'labels'
+      labels_transition_match?(filter, changed_attribute)
+    else
+      scalar_transition_match?(filter, changed_attribute)
+    end
+  end
+
+  # Mirrors the wildcard semantics of labels_transition_match?: an empty
+  # `from` or `to` list means "any value on that side". Without this the
+  # frontend can save `from: [], to: ['resolved']` (intent: any status ->
+  # resolved) and Ruby's `Array.in?([])` is always false, so the rule never
+  # fires.
+  def scalar_transition_match?(filter, changed_attribute)
+    from_values = Array(filter['values']['from'])
+    to_values = Array(filter['values']['to'])
+
+    from_match = from_values.empty? || changed_attribute[0].in?(from_values)
+    to_match = to_values.empty? || changed_attribute[1].in?(to_values)
+
+    from_match && to_match
+  end
+
+  # Labels are array-valued (label_list via acts-as-taggable). Match by diff:
+  # `to` is satisfied when at least one of the requested labels was added in
+  # this update; `from` is satisfied when at least one was removed. An empty
+  # `to`/`from` acts as a wildcard for that direction.
+  def labels_transition_match?(filter, changed_attribute)
+    previous_labels = Array(changed_attribute[0])
+    current_labels = Array(changed_attribute[1])
+    from_titles = label_titles_from_ids(filter['values']['from'])
+    to_titles = label_titles_from_ids(filter['values']['to'])
+
+    added = current_labels - previous_labels
+    removed = previous_labels - current_labels
+
+    return false if to_titles.any? && !added.intersect?(to_titles)
+    return false if from_titles.any? && !removed.intersect?(from_titles)
+
+    true
+  end
+
+  def label_titles_from_ids(ids)
+    return [] if ids.blank?
+
+    Label.where(id: Array(ids)).pluck(:title)
   end
 
   # We intersect with the record if query_operator-AND is present and union if query_operator-OR is present
@@ -120,11 +190,16 @@ class AutomationRules::ConditionsFilterService < FilterService
     attribute_key = query_hash['attribute_key']
     query_operator = query_hash['query_operator']
 
-    # Para labels, converte IDs para títulos
+    # Para labels, converte IDs (UUIDs) para títulos. O frontend salva o id
+    # da Label no `values`, mas o tag (`tags.name`) é comparado pelo título.
+    # Se o item não bater como UUID (ex.: regras antigas que já gravaram o
+    # título) ou se a Label não existir mais, mantemos o valor original como
+    # fallback para não converter silenciosamente um valor válido em vazio.
     if attribute_key == 'labels'
-      label_ids = query_hash['values']
-      label_titles = Label.where(id: label_ids).pluck(:title)
-      query_hash = query_hash.merge('values' => label_titles)
+      raw_values = Array(query_hash['values']).map(&:to_s)
+      titles_by_id = Label.where(id: raw_values).pluck(:id, :title).to_h.transform_keys(&:to_s)
+      resolved = raw_values.map { |v| titles_by_id[v] || v }
+      query_hash = query_hash.merge('values' => resolved)
     end
 
     filter_operator_value = filter_operation(query_hash, current_index)
@@ -134,7 +209,7 @@ class AutomationRules::ConditionsFilterService < FilterService
       " contacts.additional_attributes ->> '#{attribute_key}' #{filter_operator_value} #{query_operator} "
     when 'standard'
       if attribute_key == 'labels'
-        " tags.name #{filter_operator_value} #{query_operator} "
+        labels_query_fragment(query_hash, current_index, query_operator)
       else
         " contacts.#{attribute_key} #{filter_operator_value} #{query_operator} "
       end
@@ -144,14 +219,19 @@ class AutomationRules::ConditionsFilterService < FilterService
   def conversation_query_string(table_name, current_filter, query_hash, current_index)
     attribute_key = query_hash['attribute_key']
     query_operator = query_hash['query_operator']
-    
-    # Para labels, converte IDs para títulos
+
+    # Para labels, converte IDs (UUIDs) para títulos. O frontend salva o id
+    # da Label no `values`, mas o tag (`tags.name`) é comparado pelo título.
+    # Se o item não bater como UUID (ex.: regras antigas que já gravaram o
+    # título) ou se a Label não existir mais, mantemos o valor original como
+    # fallback para não converter silenciosamente um valor válido em vazio.
     if attribute_key == 'labels'
-      label_ids = query_hash['values']
-      label_titles = Label.where(id: label_ids).pluck(:title)
-      query_hash = query_hash.merge('values' => label_titles)
+      raw_values = Array(query_hash['values']).map(&:to_s)
+      titles_by_id = Label.where(id: raw_values).pluck(:id, :title).to_h.transform_keys(&:to_s)
+      resolved = raw_values.map { |v| titles_by_id[v] || v }
+      query_hash = query_hash.merge('values' => resolved)
     end
-    
+
     filter_operator_value = filter_operation(query_hash, current_index)
 
     case current_filter['attribute_type']
@@ -159,7 +239,7 @@ class AutomationRules::ConditionsFilterService < FilterService
       " #{table_name}.additional_attributes ->> '#{attribute_key}' #{filter_operator_value} #{query_operator} "
     when 'standard'
       if attribute_key == 'labels'
-        " tags.name #{filter_operator_value} #{query_operator} "
+        labels_query_fragment(query_hash, current_index, query_operator)
       else
         " #{table_name}.#{attribute_key} #{filter_operator_value} #{query_operator} "
       end
@@ -167,6 +247,39 @@ class AutomationRules::ConditionsFilterService < FilterService
   end
 
   private
+
+  # Builds a self-contained EXISTS / NOT EXISTS fragment for a `labels`
+  # condition. Each label condition is independent of any others (no shared
+  # JOIN row), and it natively handles the "this label is absent" case via
+  # NOT EXISTS — which is what users mean by `labels != X`, including the
+  # case where the conversation has zero labels at all (a NULL row in a LEFT
+  # JOIN would not satisfy NOT IN).
+  #
+  # The subquery looks up taggings on both the Conversation and its Contact,
+  # mirroring the rest of the CRM where a "conversation label" is the union
+  # of conversation- and contact-level tags.
+  def labels_query_fragment(query_hash, current_index, query_operator)
+    filter_operator = query_hash[:filter_operator] || query_hash['filter_operator']
+    negate = filter_operator == 'not_equal_to'
+
+    existence = negate ? 'NOT EXISTS' : 'EXISTS'
+
+    subquery = <<~SQL.squish
+      SELECT 1
+        FROM taggings AS lbl_tg
+        JOIN tags    AS lbl_t ON lbl_t.id = lbl_tg.tag_id
+       WHERE lbl_tg.context = 'labels'
+         AND (
+              (lbl_tg.taggable_type = 'Conversation' AND lbl_tg.taggable_id = conversations.id)
+           OR (lbl_tg.taggable_type = 'Contact'      AND lbl_tg.taggable_id = contacts.id)
+         )
+         AND lbl_t.name IN (:value_#{current_index})
+    SQL
+
+    @filter_values["value_#{current_index}"] = Array(query_hash['values'])
+
+    " #{existence} (#{subquery}) #{query_operator} "
+  end
 
   def extract_filters(query_hash)
     {
@@ -216,20 +329,16 @@ class AutomationRules::ConditionsFilterService < FilterService
     ).joins(
       'LEFT OUTER JOIN pipelines on pipelines.id = pipeline_items.pipeline_id'
     )
-    
-    # Adiciona JOIN com tags se houver condições de labels
-    if @rule.conditions.any? { |c| c['attribute_key'] == 'labels' }
-      # Para conversas, usa taggings com taggable_type = 'Conversation'
-      # Para contatos, usa taggings com taggable_type = 'Contact'
-      if @rule.event_name.include?('contact')
-        records = records.joins("LEFT OUTER JOIN taggings ON taggings.taggable_id = contacts.id AND taggings.taggable_type = 'Contact' AND taggings.context = 'labels'")
-                         .joins('LEFT OUTER JOIN tags ON tags.id = taggings.tag_id')
-      else
-        records = records.joins("LEFT OUTER JOIN taggings ON taggings.taggable_id = conversations.id AND taggings.taggable_type = 'Conversation' AND taggings.context = 'labels'")
-                         .joins('LEFT OUTER JOIN tags ON tags.id = taggings.tag_id')
-      end
-    end
-    
+
+    # Conditions de `labels` agora viram subqueries EXISTS no próprio
+    # query_string (ver labels_query_fragment). O JOIN antigo de
+    # taggings+tags se mostrou frágil em dois cenários:
+    #   1. múltiplas condições de labels disputavam o mesmo row do JOIN,
+    #      então `labels=A AND labels!=B` nunca casava ao mesmo tempo;
+    #   2. operadores `not_equal_to` com LEFT JOIN ignoravam rows com
+    #      tags.name IS NULL (NULL não satisfaz NOT IN em SQL padrão).
+    # Não precisamos mais do JOIN aqui.
+
     records = records.where(messages: { id: @options[:message].id }) if @options[:message].present?
     records
   end

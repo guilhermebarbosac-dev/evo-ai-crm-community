@@ -33,6 +33,7 @@ Rails.application.routes.draw do
         get 'app_configs/:config_type', to: 'app_configs#show', as: :app_config
         post 'app_configs/:config_type', to: 'app_configs#create', as: :app_configs
         post 'app_configs/:config_type/test_connection', to: 'app_configs#test_connection', as: :test_app_config_connection
+        delete 'app_configs/:config_type', to: 'app_configs#destroy', as: :destroy_app_config
       end
 
       resource :global_config, controller: 'global_config', only: [:show]
@@ -229,6 +230,19 @@ Rails.application.routes.draw do
 
       resources :automation_rules, only: [:index, :create, :show, :update, :destroy], controller: 'automation_rules' do
         post :clone, on: :member
+        get :runs, on: :member
+      end
+
+      # Product Catalog (EVO-1109)
+      resources :products, only: [:index, :create, :show, :update, :destroy], controller: 'products' do
+        resources :variants, controller: 'products/variants', only: [:index, :create, :update, :destroy]
+      end
+
+      # Attach/detach products to AI agents (agent lives in evo_core; we only
+      # track the join here and propagate to agent.config via
+      # Ai::AgentProductSyncService).
+      resources :ai_agents, only: [] do
+        resources :products, controller: 'ai_agents/products', only: [:index, :create, :destroy]
       end
 
       resources :macros, only: [:index, :create, :show, :update, :destroy], controller: 'macros' do
@@ -317,6 +331,7 @@ Rails.application.routes.draw do
 
       scope path: 'channels', as: 'channels' do
         resource :twilio_channel, only: [:create], controller: 'channels/twilio_channels'
+        post 'notificame/verify', to: 'channels/notificame_channels#verify', as: :notificame_verify
       end
 
       scope path: 'notificame', as: 'notificame' do
@@ -493,6 +508,14 @@ Rails.application.routes.draw do
 
       resources :upload, only: [:create], controller: 'uploads'
 
+      resources :templates, controller: 'templates', only: [] do
+        collection do
+          get :exportable_inventory
+          post :export
+          post :import
+        end
+      end
+
       resources :pipelines, controller: 'pipelines' do
         collection do
           get :stats
@@ -527,6 +550,7 @@ Rails.application.routes.draw do
             get :available_contacts
           end
           resources :tasks, controller: 'pipeline_tasks', only: [:index, :create]
+          resources :products, controller: 'pipeline_items/products', only: [:index, :create, :update, :destroy]
         end
         resources :pipeline_tasks, only: [:show, :update, :destroy], controller: 'pipeline_tasks' do
           member do

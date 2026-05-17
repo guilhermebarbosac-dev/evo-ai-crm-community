@@ -20,7 +20,7 @@ ActiveRecord::Schema[7.1].define(version: 9025_08_19_224901) do
 
   # Custom types defined in this database.
   # Note that some types may not work with other database engines. Be careful if changing database.
-  create_enum "contact_type_enum", ["person", "company"]
+  create_enum "contact_type_enum", ["person", "company", "group"]
 
   create_table "access_tokens", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.string "name", limit: 255, null: false
@@ -122,6 +122,16 @@ ActiveRecord::Schema[7.1].define(version: 9025_08_19_224901) do
     t.integer "debounce_time", default: 5, null: false
   end
 
+  create_table "ai_agent_products", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.uuid "ai_agent_id", null: false
+    t.uuid "product_id", null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["ai_agent_id", "product_id"], name: "index_ai_agent_products_unique", unique: true
+    t.index ["ai_agent_id"], name: "index_ai_agent_products_on_ai_agent_id"
+    t.index ["product_id"], name: "index_ai_agent_products_on_product_id"
+  end
+
   create_table "alembic_version", primary_key: "version_num", id: { type: :string, limit: 32 }, force: :cascade do |t|
   end
 
@@ -143,6 +153,24 @@ ActiveRecord::Schema[7.1].define(version: 9025_08_19_224901) do
     t.string "attachable_type"
     t.uuid "attachable_id"
     t.index ["attachable_type", "attachable_id"], name: "index_attachments_on_attachable_type_and_attachable_id"
+  end
+
+  create_table "automation_rule_runs", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.uuid "automation_rule_id", null: false
+    t.string "event_name", null: false
+    t.string "status", null: false
+    t.datetime "started_at", null: false
+    t.datetime "finished_at"
+    t.integer "duration_ms"
+    t.text "error_message"
+    t.jsonb "payload", default: {}
+    t.jsonb "steps", default: []
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["automation_rule_id", "started_at"], name: "index_automation_rule_runs_on_rule_and_started_at", order: { started_at: :desc }
+    t.index ["automation_rule_id"], name: "index_automation_rule_runs_on_automation_rule_id"
+    t.index ["started_at"], name: "index_automation_rule_runs_on_started_at"
+    t.index ["status"], name: "index_automation_rule_runs_on_status"
   end
 
   create_table "automation_rules", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -597,10 +625,6 @@ ActiveRecord::Schema[7.1].define(version: 9025_08_19_224901) do
     t.index ["name"], name: "idx_evo_core_api_keys_name_unique", unique: true
   end
 
-  create_table "evo_core_community_schema_migrations", primary_key: "version", id: :bigint, default: nil, force: :cascade do |t|
-    t.boolean "dirty", null: false
-  end
-
   create_table "evo_core_custom_mcp_servers", id: :uuid, default: -> { "uuid_generate_v4()" }, force: :cascade do |t|
     t.string "name", limit: 255, null: false
     t.text "description"
@@ -674,6 +698,10 @@ ActiveRecord::Schema[7.1].define(version: 9025_08_19_224901) do
     t.index ["name"], name: "idx_evo_core_mcp_servers_name", unique: true
     t.check_constraint "config_type::text = ANY (ARRAY['studio'::text, 'sse'::text])", name: "check_mcp_server_config_type"
     t.check_constraint "type::text = ANY (ARRAY['official'::text, 'community'::text])", name: "check_mcp_server_type"
+  end
+
+  create_table "evo_core_schema_community_migrations", primary_key: "version", id: :bigint, default: nil, force: :cascade do |t|
+    t.boolean "dirty", null: false
   end
 
   create_table "facebook_comment_moderations", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -963,6 +991,27 @@ ActiveRecord::Schema[7.1].define(version: 9025_08_19_224901) do
     t.index ["uid"], name: "index_oauth_applications_on_uid", unique: true
   end
 
+  create_table "pipeline_item_products", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.uuid "pipeline_item_id", null: false
+    t.uuid "product_id", null: false
+    t.uuid "product_variant_id"
+    t.integer "quantity", default: 1, null: false
+    t.decimal "locked_unit_price", precision: 10, scale: 2, null: false
+    t.string "currency", limit: 3, null: false
+    t.text "notes"
+    t.string "created_by_type", limit: 50
+    t.uuid "created_by_id"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["created_by_type", "created_by_id"], name: "index_pipeline_item_products_on_creator"
+    t.index ["pipeline_item_id", "product_id", "product_variant_id"], name: "index_pipeline_item_products_unique_combo"
+    t.index ["pipeline_item_id"], name: "index_pipeline_item_products_on_pipeline_item_id"
+    t.index ["product_id"], name: "index_pipeline_item_products_on_product_id"
+    t.index ["product_variant_id"], name: "index_pipeline_item_products_on_product_variant_id"
+    t.check_constraint "locked_unit_price >= 0::numeric", name: "pipeline_item_products_locked_unit_price_non_negative"
+    t.check_constraint "quantity > 0", name: "pipeline_item_products_quantity_positive"
+  end
+
   create_table "pipeline_items", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.uuid "pipeline_id", null: false
     t.uuid "conversation_id"
@@ -1073,6 +1122,48 @@ ActiveRecord::Schema[7.1].define(version: 9025_08_19_224901) do
     t.timestamptz "updated_at"
 
     t.unique_constraint ["name"], name: "plans_name_key"
+  end
+
+  create_table "product_variants", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.uuid "product_id", null: false
+    t.string "name", limit: 255, null: false
+    t.string "sku", limit: 100
+    t.decimal "price_override", precision: 10, scale: 2
+    t.integer "stock_quantity"
+    t.jsonb "attributes_data", default: {}, null: false
+    t.integer "position", default: 0, null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["attributes_data"], name: "index_product_variants_on_attributes_data", using: :gin
+    t.index ["product_id", "name"], name: "index_product_variants_on_product_and_name", unique: true
+    t.index ["product_id"], name: "index_product_variants_on_product_id"
+    t.index ["sku"], name: "index_product_variants_on_sku", unique: true, where: "(sku IS NOT NULL)"
+    t.check_constraint "price_override IS NULL OR price_override >= 0::numeric", name: "product_variants_price_override_non_negative"
+    t.check_constraint "stock_quantity IS NULL OR stock_quantity >= 0", name: "product_variants_stock_quantity_non_negative"
+  end
+
+  create_table "products", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.string "name", limit: 255, null: false
+    t.string "slug", limit: 255
+    t.string "kind", limit: 20, default: "physical", null: false
+    t.text "description"
+    t.string "sku", limit: 100
+    t.decimal "default_price", precision: 10, scale: 2, default: "0.0", null: false
+    t.string "currency", limit: 3, default: "BRL", null: false
+    t.string "purchase_url", limit: 2048
+    t.string "status", limit: 20, default: "active", null: false
+    t.integer "stock_quantity"
+    t.jsonb "metadata", default: {}, null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["kind"], name: "index_products_on_kind"
+    t.index ["metadata"], name: "index_products_on_metadata", using: :gin
+    t.index ["sku"], name: "index_products_on_sku", unique: true, where: "(sku IS NOT NULL)"
+    t.index ["status"], name: "index_products_on_status"
+    t.check_constraint "default_price >= 0::numeric", name: "products_default_price_non_negative"
+    t.check_constraint "kind::text = ANY (ARRAY['physical'::character varying, 'digital'::character varying]::text[])", name: "products_kind_check"
+    t.check_constraint "status::text = ANY (ARRAY['active'::character varying, 'inactive'::character varying, 'draft'::character varying]::text[])", name: "products_status_check"
+    t.check_constraint "stock_quantity IS NULL OR stock_quantity >= 0", name: "products_stock_quantity_non_negative"
   end
 
   create_table "reporting_events", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -1291,6 +1382,7 @@ ActiveRecord::Schema[7.1].define(version: 9025_08_19_224901) do
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
     t.index ["user_id", "tour_key"], name: "index_user_tours_on_user_id_and_tour_key", unique: true
+    t.index ["user_id"], name: "index_user_tours_on_user_id"
   end
 
   create_table "users", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -1370,6 +1462,8 @@ ActiveRecord::Schema[7.1].define(version: 9025_08_19_224901) do
   add_foreign_key "active_storage_attachments", "active_storage_blobs", column: "blob_id"
   add_foreign_key "active_storage_variant_records", "active_storage_blobs", column: "blob_id"
   add_foreign_key "agent_bot_inboxes", "agent_bots", column: "facebook_comment_agent_bot_id", on_delete: :nullify
+  add_foreign_key "ai_agent_products", "products", on_delete: :cascade
+  add_foreign_key "automation_rule_runs", "automation_rules", on_delete: :cascade
   add_foreign_key "contact_companies", "contacts"
   add_foreign_key "contact_companies", "contacts", column: "company_id"
   add_foreign_key "data_privacy_consents", "users"
@@ -1383,6 +1477,9 @@ ActiveRecord::Schema[7.1].define(version: 9025_08_19_224901) do
   add_foreign_key "facebook_comment_moderations", "messages"
   add_foreign_key "oauth_access_grants", "oauth_applications", column: "application_id"
   add_foreign_key "oauth_access_tokens", "oauth_applications", column: "application_id"
+  add_foreign_key "pipeline_item_products", "pipeline_items", on_delete: :cascade
+  add_foreign_key "pipeline_item_products", "product_variants", on_delete: :restrict
+  add_foreign_key "pipeline_item_products", "products", on_delete: :restrict
   add_foreign_key "pipeline_items", "contacts"
   add_foreign_key "pipeline_items", "conversations"
   add_foreign_key "pipeline_items", "pipeline_stages"
@@ -1392,6 +1489,7 @@ ActiveRecord::Schema[7.1].define(version: 9025_08_19_224901) do
   add_foreign_key "pipeline_tasks", "pipeline_tasks", column: "parent_task_id"
   add_foreign_key "plan_features", "features", name: "plan_features_feature_id_fkey"
   add_foreign_key "plan_features", "plans", name: "plan_features_plan_id_fkey"
+  add_foreign_key "product_variants", "products", on_delete: :cascade
   add_foreign_key "role_permissions_actions", "roles"
   add_foreign_key "scheduled_action_execution_logs", "scheduled_actions"
   add_foreign_key "scheduled_action_notifications", "scheduled_actions", on_delete: :cascade

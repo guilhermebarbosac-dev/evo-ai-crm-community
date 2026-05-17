@@ -7,10 +7,11 @@ class Api::V1::AutomationRulesController < Api::V1::BaseController
     create: 'automation_rules.create',
     update: 'automation_rules.update',
     destroy: 'automation_rules.delete',
-    clone: 'automation_rules.clone'
+    clone: 'automation_rules.clone',
+    runs: 'automation_rules.read'
   })
 
-  before_action :fetch_automation_rule, only: [:show, :update, :destroy, :clone]
+  before_action :fetch_automation_rule, only: [:show, :update, :destroy, :clone, :runs]
   before_action :validate_automation_limit, only: [:create]
 
   private
@@ -100,15 +101,33 @@ class Api::V1::AutomationRulesController < Api::V1::BaseController
   end
 
   def clone
-    automation_rule = AutomationRule.find_by(id: params[:automation_rule_id])
-    new_rule = automation_rule.dup
+    new_rule = @automation_rule.dup
     new_rule.save!
     @automation_rule = new_rule
-    
+
     success_response(
       data: AutomationRuleSerializer.serialize(@automation_rule),
       message: 'Automation rule cloned successfully',
       status: :created
+    )
+  end
+
+  def runs
+    runs_scope = @automation_rule.runs.recent.with_status(params[:status])
+    @runs = runs_scope.limit(per_page).offset(page_offset)
+    total = runs_scope.count
+
+    success_response(
+      data: @runs.map { |run| serialize_run(run) },
+      meta: {
+        pagination: {
+          page: current_page,
+          per_page: per_page,
+          total_count: total,
+          total_pages: (total / per_page.to_f).ceil
+        }
+      },
+      message: 'Automation rule runs retrieved successfully'
     )
   end
 
@@ -133,6 +152,33 @@ class Api::V1::AutomationRulesController < Api::V1::BaseController
     @automation_rule.save!
   end
 
+  def serialize_run(run)
+    {
+      id: run.id,
+      automation_rule_id: run.automation_rule_id,
+      event_name: run.event_name,
+      status: run.status,
+      started_at: run.started_at&.iso8601,
+      finished_at: run.finished_at&.iso8601,
+      duration_ms: run.duration_ms,
+      error_message: run.error_message,
+      payload: run.payload,
+      steps: run.steps
+    }
+  end
+
+  def current_page
+    [params[:page].to_i, 1].max
+  end
+
+  def per_page
+    [(params[:per_page] || 25).to_i, 100].min
+  end
+
+  def page_offset
+    (current_page - 1) * per_page
+  end
+
   def automation_rules_permit
     params.permit(
       :name, :description, :event_name, :active, :mode,
@@ -140,7 +186,7 @@ class Api::V1::AutomationRulesController < Api::V1::BaseController
       actions: [:action_name, { action_params: [] }],
       flow_data: {
         nodes: [
-          :id, :type, 
+          :id, :type,
           position: [:x, :y],
           data: {},
           measured: [:width, :height]
@@ -155,9 +201,5 @@ class Api::V1::AutomationRulesController < Api::V1::BaseController
         ]
       }
     )
-  end
-
-  def fetch_automation_rule
-    @automation_rule = AutomationRule.find_by(id: params[:id])
   end
 end
