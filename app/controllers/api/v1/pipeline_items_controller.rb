@@ -48,11 +48,11 @@ class Api::V1::PipelineItemsController < Api::V1::BaseController
         return
       end
 
-      # Check if conversation is already in THIS specific pipeline
-      if @pipeline.pipeline_items.exists?(conversation: conversation)
+      # Check if conversation has an ACTIVE (not completed) item in this pipeline
+      if @pipeline.pipeline_items.where(conversation: conversation, completed_at: nil).exists?
         error_response(
           ApiErrorCodes::BUSINESS_RULE_VIOLATION,
-          'Item is already in this pipeline'
+          'Item already has an active journey in this pipeline'
         )
         return
       end
@@ -69,11 +69,11 @@ class Api::V1::PipelineItemsController < Api::V1::BaseController
         return
       end
 
-      # Check if contact is already in THIS specific pipeline
-      if @pipeline.pipeline_items.exists?(contact: contact)
+      # Check if contact has an ACTIVE (not completed) item in this pipeline
+      if @pipeline.pipeline_items.where(contact: contact, completed_at: nil).exists?
         error_response(
           ApiErrorCodes::BUSINESS_RULE_VIOLATION,
-          'Contact is already in this pipeline'
+          'Contact already has an active journey in this pipeline'
         )
         return
       end
@@ -93,13 +93,13 @@ class Api::V1::PipelineItemsController < Api::V1::BaseController
     pipeline_stage = @pipeline.pipeline_stages.find(stage_id)
 
     if conversation.present?
-      # Check if conversation already exists in this pipeline
-      existing_pc = @pipeline.pipeline_items.find_by(conversation: conversation)
+      # Check if conversation already has an ACTIVE journey in this pipeline
+      existing_pc = @pipeline.pipeline_items.find_by(conversation: conversation, completed_at: nil)
 
       if existing_pc
         error_response(
           ApiErrorCodes::BUSINESS_RULE_VIOLATION,
-          "Item already exists in this pipeline in stage '#{existing_pc.pipeline_stage.name}'",
+          "Item already has an active journey in this pipeline in stage '#{existing_pc.pipeline_stage.name}'",
           details: {
             existing_stage: existing_pc.pipeline_stage.name,
             existing_stage_id: existing_pc.pipeline_stage_id
@@ -592,6 +592,16 @@ class Api::V1::PipelineItemsController < Api::V1::BaseController
   end
 
   def apply_filters
+    # By default show only active items; pass status=completed to see completed, status=all for everything
+    case params[:status]
+    when 'completed'
+      @pipeline_items = @pipeline_items.where.not(completed_at: nil)
+    when 'all'
+      # no filter
+    else
+      @pipeline_items = @pipeline_items.where(completed_at: nil)
+    end
+
     @pipeline_items = filter_by_stage if params[:stage_id].present?
     @pipeline_items = search_conversations if params[:search].present?
   end

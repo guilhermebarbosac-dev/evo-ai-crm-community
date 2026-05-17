@@ -45,8 +45,10 @@ class PipelineItem < ApplicationRecord
   has_many :products, through: :pipeline_item_products
   has_many :product_variants, through: :pipeline_item_products
 
-  validates :conversation_id, uniqueness: { scope: :pipeline_id }, allow_nil: true
-  validates :contact_id, uniqueness: { scope: :pipeline_id }, allow_nil: true
+  validates :conversation_id, uniqueness: { scope: :pipeline_id, conditions: -> { where(completed_at: nil) },
+                                            message: 'already has an active journey in this pipeline' }, allow_nil: true
+  validates :contact_id, uniqueness: { scope: :pipeline_id, conditions: -> { where(completed_at: nil) },
+                                       message: 'already has an active journey in this pipeline' }, allow_nil: true
   validate :must_have_conversation_or_contact
   validate :validate_custom_fields_structure
 
