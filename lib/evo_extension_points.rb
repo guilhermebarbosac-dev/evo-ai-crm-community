@@ -6,18 +6,20 @@
 # point at process start via EvoExtensionPoints.replace(:name, &block) or via
 # the per-module register* / replace* APIs.
 
-require_relative 'evo_extension_points/feature_gate'
-require_relative 'evo_extension_points/tenant_context'
+require_relative 'evo_extension_points/capability_gate'
+require_relative 'evo_extension_points/runtime_context'
 require_relative 'evo_extension_points/plugin_loader'
 require_relative 'evo_extension_points/theme_tokens'
 require_relative 'evo_extension_points/data_export'
 require_relative 'evo_extension_points/contract_check'
 
 module EvoExtensionPoints
+  EXTENSION_POINTS_VERSION = '2.0.0'
+
   KNOWN_KEYS = %i[
-    feature_gate
-    tenant_context_current_id
-    tenant_context_with_tenant
+    capability_gate
+    runtime_context_current_id
+    runtime_context_with_scope
     theme_tokens
   ].freeze
 

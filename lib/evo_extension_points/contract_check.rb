@@ -5,11 +5,12 @@ module EvoExtensionPoints
   # EXTENSION_POINTS.md against the modules actually exposed under
   # EvoExtensionPoints. Used by the rake task
   # evo_extension_points:check_contract (lib/tasks/evo_extension_points.rake)
-  # which the community-with-enterprise-stub CI workflow runs on every PR.
+  # which the community-with-extension-consumer-stub CI workflow runs on every
+  # PR.
   #
   # Extension point names are normalized to lowercase snake_case strings on
   # both sides:
-  #   - From EXTENSION_POINTS.md: parsed out of `### N. \`feature_gate\``
+  #   - From EXTENSION_POINTS.md: parsed out of `### N. \`capability_gate\``
   #     headings and from the "## Extension points" overview table.
   #   - From the live API: each constant directly defined under
   #     EvoExtensionPoints that is itself a Module (i.e. an extension

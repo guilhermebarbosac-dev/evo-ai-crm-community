@@ -2,16 +2,15 @@
 
 module EvoExtensionPoints
   # Data export extension point. The community release does not declare any
-  # exportable tables on its own — DataExport.exportable_tables_for_tenant
-  # returns []. An external consumer (e.g. an enterprise gem providing
-  # tenant-scoped data export) registers exportable tables via
+  # exportable tables on its own — DataExport.exportable_tables_for_scope
+  # returns []. An external consumer registers exportable tables via
   # DataExport.register(name:, &scope_block) at boot, and the registry is
   # consulted at runtime.
   #
-  # The "scope block" receives a tenant_id and must return an Enumerable of
-  # records or a query-like object the caller can iterate. The community
-  # never reaches into community tables on behalf of the consumer; the block
-  # is the consumer's responsibility.
+  # The "scope block" receives a scope_id (an opaque consumer-defined value)
+  # and must return an Enumerable of records or a query-like object the caller
+  # can iterate. The community never reaches into community tables on behalf
+  # of the consumer; the block is the consumer's responsibility.
   module DataExport
     Entry = Struct.new(:name, :scope_block, keyword_init: true)
 
@@ -24,9 +23,9 @@ module EvoExtensionPoints
         sym
       end
 
-      def exportable_tables_for_tenant(tenant_id)
+      def exportable_tables_for_scope(scope_id)
         registry.values.map do |entry|
-          { name: entry.name, records: entry.scope_block.call(tenant_id) }
+          { name: entry.name, records: entry.scope_block.call(scope_id) }
         end
       end
 

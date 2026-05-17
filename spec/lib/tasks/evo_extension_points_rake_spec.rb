@@ -26,8 +26,8 @@ RSpec.describe 'evo_extension_points:check_contract rake task', type: :task do
   context 'when an extension point declared in the markdown has no matching module' do
     before do
       stub_extension_points_md(<<~MD)
-        ### 1. `feature_gate`
-        ### 2. `tenant_context`
+        ### 1. `capability_gate`
+        ### 2. `runtime_context`
         ### 3. `plugin_loader`
         ### 4. `theme_tokens`
         ### 5. `data_export`
@@ -45,8 +45,8 @@ RSpec.describe 'evo_extension_points:check_contract rake task', type: :task do
   context 'when a module exists under EvoExtensionPoints but is not documented' do
     before do
       stub_extension_points_md(<<~MD)
-        ### 1. `feature_gate`
-        ### 2. `tenant_context`
+        ### 1. `capability_gate`
+        ### 2. `runtime_context`
         ### 3. `plugin_loader`
         ### 4. `theme_tokens`
       MD

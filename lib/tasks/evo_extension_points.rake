@@ -5,7 +5,7 @@
 # Guard-rail that catches breaking changes to the public extension contract
 # declared in EXTENSION_POINTS.md (story 0.2) versus the live Ruby modules
 # under EvoExtensionPoints (story 0.5). Wired into CI by the workflow
-# .github/workflows/community-with-enterprise-stub.yml.
+# .github/workflows/community-with-extension-consumer-stub.yml.
 #
 # The check is intentionally simple: parse the documented extension point
 # names out of EXTENSION_POINTS.md and confirm a corresponding constant

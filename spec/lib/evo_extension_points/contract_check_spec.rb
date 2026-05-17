@@ -11,11 +11,11 @@ RSpec.describe EvoExtensionPoints::ContractCheck do
 
         ## Extension points
 
-        ### 1. `feature_gate`
+        ### 1. `capability_gate`
 
         Some prose.
 
-        ### 2. `tenant_context`
+        ### 2. `runtime_context`
 
         ### 3. `plugin_loader`
 
@@ -25,16 +25,16 @@ RSpec.describe EvoExtensionPoints::ContractCheck do
       MD
 
       expect(described_class.documented_points(markdown))
-        .to match_array(%w[feature_gate tenant_context plugin_loader theme_tokens data_export])
+        .to match_array(%w[capability_gate runtime_context plugin_loader theme_tokens data_export])
     end
 
     it 'is case-insensitive and deduplicated' do
       markdown = <<~MD
-        ### 1. `feature_gate`
-        ### 2. `feature_gate`
+        ### 1. `capability_gate`
+        ### 2. `capability_gate`
       MD
 
-      expect(described_class.documented_points(markdown)).to eq(%w[feature_gate])
+      expect(described_class.documented_points(markdown)).to eq(%w[capability_gate])
     end
 
     it 'ignores headings that are not extension point declarations' do
@@ -50,7 +50,7 @@ RSpec.describe EvoExtensionPoints::ContractCheck do
   describe '.implemented_points' do
     it 'lists every Module constant directly defined under EvoExtensionPoints' do
       points = described_class.implemented_points
-      expect(points).to include('feature_gate', 'tenant_context', 'plugin_loader', 'theme_tokens', 'data_export')
+      expect(points).to include('capability_gate', 'runtime_context', 'plugin_loader', 'theme_tokens', 'data_export')
     end
 
     it 'excludes internal infrastructure (KNOWN_KEYS, UnknownExtensionPoint, ContractCheck)' do
@@ -76,8 +76,8 @@ RSpec.describe EvoExtensionPoints::ContractCheck do
   describe 'breaking change detection (simulated)' do
     it 'flags an extension point that was renamed in the markdown but kept in the API' do
       tampered = <<~MD
-        ### 1. `feature_gate`
-        ### 2. `renamed_tenant_context`
+        ### 1. `capability_gate`
+        ### 2. `renamed_runtime_context`
         ### 3. `plugin_loader`
         ### 4. `theme_tokens`
         ### 5. `data_export`
@@ -89,13 +89,13 @@ RSpec.describe EvoExtensionPoints::ContractCheck do
       missing = documented - implemented
       undocumented = implemented - documented
 
-      expect(missing).to include('renamed_tenant_context')
-      expect(undocumented).to include('tenant_context')
+      expect(missing).to include('renamed_runtime_context')
+      expect(undocumented).to include('runtime_context')
     end
 
     it 'flags an extension point that was removed from the markdown but kept in the API' do
       tampered = <<~MD
-        ### 1. `feature_gate`
+        ### 1. `capability_gate`
         ### 2. `plugin_loader`
         ### 3. `theme_tokens`
         ### 4. `data_export`
@@ -105,7 +105,7 @@ RSpec.describe EvoExtensionPoints::ContractCheck do
       implemented = described_class.implemented_points
 
       undocumented = implemented - documented
-      expect(undocumented).to include('tenant_context')
+      expect(undocumented).to include('runtime_context')
     end
   end
 end

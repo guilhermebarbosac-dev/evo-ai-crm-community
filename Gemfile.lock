@@ -14,9 +14,9 @@ GIT
       nokogiri (~> 1, >= 1.10.8)
 
 PATH
-  remote: spec/support/enterprise_stub
+  remote: spec/support/extension_consumer_stub
   specs:
-    enterprise_stub (0.0.0)
+    extension_consumer_stub (0.0.0)
 
 GEM
   remote: https://rubygems.org/
@@ -993,7 +993,7 @@ DEPENDENCIES
   down
   elastic-apm
   email_reply_trimmer
-  enterprise_stub!
+  extension_consumer_stub!
   facebook-messenger
   factory_bot_rails (>= 6.4.3)
   faker

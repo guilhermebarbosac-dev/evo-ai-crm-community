@@ -4,10 +4,13 @@ require 'rails_helper'
 require 'evo_extension_points'
 
 RSpec.describe EvoExtensionPoints do
-  # Always reset the top-level EvoExtensionPoints between examples, even when
-  # nested describe blocks change described_class to a submodule that does not
-  # implement reset!.
   after { EvoExtensionPoints.reset! } # rubocop:disable RSpec/DescribedClass
+
+  describe 'EXTENSION_POINTS_VERSION' do
+    it 'advertises the 2.0.0 neutral contract' do
+      expect(described_class::EXTENSION_POINTS_VERSION).to eq('2.0.0')
+    end
+  end
 
   describe '.replace' do
     it 'rejects unknown extension point keys' do
@@ -16,42 +19,42 @@ RSpec.describe EvoExtensionPoints do
     end
 
     it 'requires a block' do
-      expect { described_class.replace(:feature_gate) }.to raise_error(ArgumentError)
+      expect { described_class.replace(:capability_gate) }.to raise_error(ArgumentError)
     end
   end
 
-  describe EvoExtensionPoints::FeatureGate do
-    it 'returns true for any flag in the community default' do
-      expect(described_class.feature_enabled?(:anything)).to be true
-      expect(described_class.feature_enabled?(:paid_feature, account: 'x')).to be true
+  describe EvoExtensionPoints::CapabilityGate do
+    it 'returns true for any capability in the community default' do
+      expect(described_class.enabled?(:anything)).to be true
+      expect(described_class.enabled?(:flagship_capability, account: 'x')).to be true
     end
 
     it 'honors a replace override' do
-      EvoExtensionPoints.replace(:feature_gate) { |flag, **_ctx| flag == :paid_feature }
-      expect(described_class.feature_enabled?(:paid_feature)).to be true
-      expect(described_class.feature_enabled?(:other)).to be false
+      EvoExtensionPoints.replace(:capability_gate) { |name, **_ctx| name == :flagship_capability }
+      expect(described_class.enabled?(:flagship_capability)).to be true
+      expect(described_class.enabled?(:other)).to be false
     end
   end
 
-  describe EvoExtensionPoints::TenantContext do
-    it 'returns nil for current_tenant_id in the community default' do
-      expect(described_class.current_tenant_id).to be_nil
+  describe EvoExtensionPoints::RuntimeContext do
+    it 'returns nil for current_scope_id in the community default' do
+      expect(described_class.current_scope_id).to be_nil
     end
 
-    it 'passes through with_tenant yielding without binding state' do
+    it 'passes through with_scope yielding without binding state' do
       yielded = false
-      result = described_class.with_tenant('any-id') do
+      result = described_class.with_scope('any-id') do
         yielded = true
         :payload
       end
       expect(yielded).to be true
       expect(result).to eq(:payload)
-      expect(described_class.current_tenant_id).to be_nil
+      expect(described_class.current_scope_id).to be_nil
     end
 
-    it 'honors a replace override on current_tenant_id' do
-      EvoExtensionPoints.replace(:tenant_context_current_id) { 'tenant-42' }
-      expect(described_class.current_tenant_id).to eq('tenant-42')
+    it 'honors a replace override on current_scope_id' do
+      EvoExtensionPoints.replace(:runtime_context_current_id) { 'scope-42' }
+      expect(described_class.current_scope_id).to eq('scope-42')
     end
   end
 
@@ -99,14 +102,14 @@ RSpec.describe EvoExtensionPoints do
 
   describe EvoExtensionPoints::DataExport do
     it 'returns an empty list by default (community registers nothing)' do
-      expect(described_class.exportable_tables_for_tenant('any')).to eq([])
+      expect(described_class.exportable_tables_for_scope('any')).to eq([])
       expect(described_class.registered_names).to eq([])
     end
 
-    it 'invokes registered scope blocks with the tenant id' do
-      described_class.register(name: :widgets) { |tenant_id| ["widget-#{tenant_id}"] }
-      result = described_class.exportable_tables_for_tenant('tenant-7')
-      expect(result).to eq([{ name: :widgets, records: ['widget-tenant-7'] }])
+    it 'invokes registered scope blocks with the scope id' do
+      described_class.register(name: :widgets) { |scope_id| ["widget-#{scope_id}"] }
+      result = described_class.exportable_tables_for_scope('scope-7')
+      expect(result).to eq([{ name: :widgets, records: ['widget-scope-7'] }])
     end
 
     it 'rejects registration without a scope block' do
