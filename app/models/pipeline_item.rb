@@ -16,12 +16,12 @@
 #
 # Indexes
 #
-#  index_pipeline_items_on_contact_id                       (contact_id)
-#  index_pipeline_items_on_contact_id_and_pipeline_id       (contact_id,pipeline_id) UNIQUE WHERE (conversation_id IS NULL)
-#  index_pipeline_items_on_conversation_id_and_pipeline_id  (conversation_id,pipeline_id) UNIQUE WHERE (conversation_id IS NOT NULL)
-#  index_pipeline_items_on_custom_fields                    (custom_fields) USING gin
-#  index_pipeline_items_on_pipeline_id                      (pipeline_id)
-#  index_pipeline_items_on_pipeline_stage_id                (pipeline_stage_id)
+#  idx_pipeline_items_active_contact_per_pipeline       (contact_id,pipeline_id) UNIQUE WHERE ((conversation_id IS NULL) AND (completed_at IS NULL))
+#  idx_pipeline_items_active_conversation_per_pipeline  (conversation_id,pipeline_id) UNIQUE WHERE ((conversation_id IS NOT NULL) AND (completed_at IS NULL))
+#  index_pipeline_items_on_contact_id                   (contact_id)
+#  index_pipeline_items_on_custom_fields                (custom_fields) USING gin
+#  index_pipeline_items_on_pipeline_id                  (pipeline_id)
+#  index_pipeline_items_on_pipeline_stage_id            (pipeline_stage_id)
 #
 # Foreign Keys
 #
