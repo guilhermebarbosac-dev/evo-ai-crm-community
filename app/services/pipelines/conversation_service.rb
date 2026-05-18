@@ -86,11 +86,13 @@ class Pipelines::ConversationService
   def prepare_conversation_for_pipeline(conversation)
     conversation.reload
 
-    existing_pipeline_items = conversation.pipeline_items.reload
-    return unless existing_pipeline_items.exists?
+    # Only remove active items from OTHER pipelines (not this one)
+    # This preserves completed journey history in the current pipeline
+    other_pipeline_items = conversation.pipeline_items.where.not(pipeline_id: @pipeline.id)
+    return unless other_pipeline_items.exists?
 
-    Rails.logger.info "Pipeline Service: Conversation #{conversation.id} already has pipeline conversations, destroying them first"
-    existing_pipeline_items.destroy_all
+    Rails.logger.info "Pipeline Service: Removing conversation #{conversation.id} from #{other_pipeline_items.count} other pipeline(s)"
+    other_pipeline_items.destroy_all
     conversation.reload
   end
 
