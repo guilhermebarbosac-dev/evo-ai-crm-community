@@ -2,18 +2,18 @@
 #
 # Table name: custom_attribute_definitions
 #
-#  id                     :uuid             not null, primary key
-#  attribute_description  :text
-#  attribute_display_name :string
-#  attribute_display_type :integer          default("text")
-#  attribute_key          :string
-#  attribute_model        :integer          default("conversation_attribute")
-#  attribute_values       :jsonb
-#  default_value          :integer
-#  regex_cue              :string
-#  regex_pattern          :string
-#  created_at             :datetime         not null
-#  updated_at             :datetime         not null
+#  id                                           :uuid             not null, primary key
+#  attribute_description                        :text
+#  attribute_display_name                       :string
+#  attribute_display_type                       :integer          default("text"), not null
+#  attribute_key                                :string
+#  attribute_model(0: contact, 1: conversation) :integer          default("conversation_attribute"), not null
+#  attribute_values                             :jsonb            not null
+#  default_value                                :integer
+#  regex_cue                                    :string
+#  regex_pattern                                :string
+#  created_at                                   :datetime         not null
+#  updated_at                                   :datetime         not null
 #
 # Indexes
 #

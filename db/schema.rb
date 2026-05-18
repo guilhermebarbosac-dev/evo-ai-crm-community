@@ -465,33 +465,41 @@ ActiveRecord::Schema[7.1].define(version: 2026_05_18_133933) do
   end
 
   create_table "contacts", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
-    t.string "name", default: ""
+    t.string "name", default: "", null: false
     t.string "email"
     t.string "phone_number"
-    t.datetime "created_at", precision: nil, null: false
-    t.datetime "updated_at", precision: nil, null: false
-    t.jsonb "additional_attributes", default: {}
+    t.datetime "created_at", precision: 3, default: -> { "CURRENT_TIMESTAMP" }, null: false
+    t.datetime "updated_at", precision: 3, default: -> { "CURRENT_TIMESTAMP" }, null: false
+    t.jsonb "additional_attributes", default: {}, null: false
     t.string "identifier"
-    t.jsonb "custom_attributes", default: {}
-    t.datetime "last_activity_at", precision: nil
-    t.integer "contact_type", default: 0
-    t.string "middle_name", default: ""
-    t.string "last_name", default: ""
-    t.string "location", default: ""
-    t.string "country_code", default: ""
+    t.jsonb "custom_attributes", default: {}, null: false
+    t.datetime "last_activity_at", precision: 3
+    t.integer "contact_type", default: 0, null: false
+    t.string "middle_name", default: "", null: false
+    t.string "last_name", default: "", null: false
+    t.string "location", default: "", null: false
+    t.string "country_code", default: "", null: false
     t.boolean "blocked", default: false, null: false
+    t.string "avatar_url"
+    t.string "pubsub_token"
+    t.boolean "hmac_verified", default: false, null: false
     t.enum "type", default: "person", null: false, enum_type: "contact_type_enum"
     t.string "tax_id", limit: 14
     t.string "website"
     t.string "industry"
+    t.index "lower((email)::text)", name: "index_contacts_on_lower_email"
+    t.index ["additional_attributes"], name: "index_contacts_on_additional_attributes", using: :gin
     t.index ["blocked"], name: "index_contacts_on_blocked"
-    t.index ["email"], name: "uniq_email_per_account_contact", unique: true
+    t.index ["custom_attributes"], name: "index_contacts_on_custom_attributes", using: :gin
+    t.index ["email", "phone_number", "identifier"], name: "index_contacts_on_nonempty_fields", where: "(((email)::text <> ''::text) OR ((phone_number)::text <> ''::text) OR ((identifier)::text <> ''::text))"
+    t.index ["email"], name: "uniq_email_contact", unique: true, where: "((email IS NOT NULL) AND ((email)::text <> ''::text))"
     t.index ["id"], name: "idx_contacts_with_identity", where: "(((email)::text <> ''::text) OR ((phone_number)::text <> ''::text) OR ((identifier)::text <> ''::text))"
-    t.index ["identifier"], name: "uniq_identifier_per_account_contact", unique: true
-    t.index ["last_activity_at"], name: "index_contacts_on_last_activity_at", order: "DESC NULLS LAST"
+    t.index ["id"], name: "index_resolved_contact", where: "(((email)::text <> ''::text) OR ((phone_number)::text <> ''::text) OR ((identifier)::text <> ''::text))"
+    t.index ["identifier"], name: "uniq_identifier_contact", unique: true
+    t.index ["last_activity_at"], name: "index_contacts_on_last_activity_at"
+    t.index ["last_activity_at"], name: "index_contacts_on_last_activity_at_desc", order: "DESC NULLS LAST"
     t.index ["name", "email", "phone_number", "identifier"], name: "index_contacts_on_name_email_phone_number_identifier", opclass: :gin_trgm_ops, using: :gin
     t.index ["name", "type", "id"], name: "idx_contacts_name_type_resolved", where: "(((email)::text <> ''::text) OR ((phone_number)::text <> ''::text) OR ((identifier)::text <> ''::text))"
-    t.index ["phone_number"], name: "index_contacts_on_phone_number"
     t.index ["tax_id"], name: "index_contacts_on_tax_id", unique: true, where: "(tax_id IS NOT NULL)"
     t.index ["type"], name: "index_contacts_on_type"
   end
@@ -565,15 +573,15 @@ ActiveRecord::Schema[7.1].define(version: 2026_05_18_133933) do
   create_table "custom_attribute_definitions", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.string "attribute_display_name"
     t.string "attribute_key"
-    t.integer "attribute_display_type", default: 0
+    t.integer "attribute_display_type", default: 0, null: false
     t.integer "default_value"
-    t.integer "attribute_model", default: 0
-    t.datetime "created_at", precision: nil, null: false
-    t.datetime "updated_at", precision: nil, null: false
+    t.integer "attribute_model", default: 0, null: false, comment: "0: contact, 1: conversation"
     t.text "attribute_description"
-    t.jsonb "attribute_values", default: []
+    t.jsonb "attribute_values", default: [], null: false
     t.string "regex_pattern"
     t.string "regex_cue"
+    t.datetime "created_at", precision: 3, default: -> { "CURRENT_TIMESTAMP" }, null: false
+    t.datetime "updated_at", precision: 3, default: -> { "CURRENT_TIMESTAMP" }, null: false
     t.index ["attribute_key", "attribute_model"], name: "attribute_key_model_index", unique: true
   end
 
@@ -983,8 +991,8 @@ ActiveRecord::Schema[7.1].define(version: 2026_05_18_133933) do
     t.text "description"
     t.string "color", default: "#1f93ff", null: false
     t.boolean "show_on_sidebar"
-    t.datetime "created_at", precision: nil, null: false
-    t.datetime "updated_at", precision: nil, null: false
+    t.datetime "created_at", precision: 3, default: -> { "CURRENT_TIMESTAMP" }, null: false
+    t.datetime "updated_at", precision: 3, default: -> { "CURRENT_TIMESTAMP" }, null: false
     t.index ["title"], name: "index_labels_on_title", unique: true
   end
 
@@ -1572,13 +1580,13 @@ ActiveRecord::Schema[7.1].define(version: 2026_05_18_133933) do
   end
 
   create_table "taggings", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
-    t.uuid "tag_id"
-    t.string "taggable_type"
-    t.uuid "taggable_id"
+    t.uuid "tag_id", null: false
+    t.string "taggable_type", null: false
+    t.uuid "taggable_id", null: false
     t.string "tagger_type"
     t.uuid "tagger_id"
     t.string "context", limit: 128
-    t.datetime "created_at", precision: nil
+    t.datetime "created_at", precision: 3, default: -> { "CURRENT_TIMESTAMP" }
     t.index ["context"], name: "index_taggings_on_context"
     t.index ["tag_id", "taggable_id", "taggable_type", "context", "tagger_id", "tagger_type"], name: "taggings_idx", unique: true
     t.index ["tag_id"], name: "index_taggings_on_tag_id"
@@ -1591,8 +1599,8 @@ ActiveRecord::Schema[7.1].define(version: 2026_05_18_133933) do
   end
 
   create_table "tags", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
-    t.string "name"
-    t.integer "taggings_count", default: 0
+    t.string "name", null: false
+    t.integer "taggings_count", default: 0, null: false
     t.index ["name"], name: "index_tags_on_name", unique: true
   end
 
