@@ -54,8 +54,9 @@ module PipelineSerializer
           labels_by_id ||= all_labels.index_by { |label| label.id.to_s }
         end
 
-        # Serialize all items with full details
-        serialized_items = pipeline.pipeline_items.map do |item|
+        # Serialize only active items (completed journeys are accessible via pipeline_items endpoint with status=completed)
+        active_items = pipeline.pipeline_items.select { |item| item.completed_at.nil? }
+        serialized_items = active_items.map do |item|
           PipelineItemSerializer.serialize(
             item,
             include_entity: true,

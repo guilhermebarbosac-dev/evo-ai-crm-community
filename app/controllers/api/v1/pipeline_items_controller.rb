@@ -48,11 +48,11 @@ class Api::V1::PipelineItemsController < Api::V1::BaseController
         return
       end
 
-      # Check if conversation is already in THIS specific pipeline
-      if @pipeline.pipeline_items.exists?(conversation: conversation)
+      # Check if conversation has an ACTIVE (not completed) item in this pipeline
+      if @pipeline.pipeline_items.where(conversation: conversation, completed_at: nil).exists?
         error_response(
           ApiErrorCodes::BUSINESS_RULE_VIOLATION,
-          'Item is already in this pipeline'
+          'Item already has an active journey in this pipeline'
         )
         return
       end
@@ -69,11 +69,11 @@ class Api::V1::PipelineItemsController < Api::V1::BaseController
         return
       end
 
-      # Check if contact is already in THIS specific pipeline
-      if @pipeline.pipeline_items.exists?(contact: contact)
+      # Check if contact has an ACTIVE (not completed) item in this pipeline
+      if @pipeline.pipeline_items.where(contact: contact, completed_at: nil).exists?
         error_response(
           ApiErrorCodes::BUSINESS_RULE_VIOLATION,
-          'Contact is already in this pipeline'
+          'Contact already has an active journey in this pipeline'
         )
         return
       end
@@ -93,13 +93,13 @@ class Api::V1::PipelineItemsController < Api::V1::BaseController
     pipeline_stage = @pipeline.pipeline_stages.find(stage_id)
 
     if conversation.present?
-      # Check if conversation already exists in this pipeline
-      existing_pc = @pipeline.pipeline_items.find_by(conversation: conversation)
+      # Check if conversation already has an ACTIVE journey in this pipeline
+      existing_pc = @pipeline.pipeline_items.find_by(conversation: conversation, completed_at: nil)
 
       if existing_pc
         error_response(
           ApiErrorCodes::BUSINESS_RULE_VIOLATION,
-          "Item already exists in this pipeline in stage '#{existing_pc.pipeline_stage.name}'",
+          "Item already has an active journey in this pipeline in stage '#{existing_pc.pipeline_stage.name}'",
           details: {
             existing_stage: existing_pc.pipeline_stage.name,
             existing_stage_id: existing_pc.pipeline_stage_id
@@ -592,8 +592,60 @@ class Api::V1::PipelineItemsController < Api::V1::BaseController
   end
 
   def apply_filters
+    # Status filter: active (default), completed, all
+    case params[:status]
+    when 'completed'
+      @pipeline_items = @pipeline_items.where.not(completed_at: nil)
+    when 'all'
+      # no filter
+    else
+      @pipeline_items = @pipeline_items.where(completed_at: nil)
+    end
+
+    # Temporal filters for completed/lost items
+    # completed_after: ISO8601 date — items completed after this date
+    # completed_before: ISO8601 date — items completed before this date
+    # completed_period: last_7d, last_30d, last_90d, last_year, this_month, this_year
+    if params[:completed_period].present?
+      range = temporal_range(params[:completed_period])
+      @pipeline_items = @pipeline_items.where(completed_at: range) if range
+    else
+      if params[:completed_after].present?
+        @pipeline_items = @pipeline_items.where('completed_at >= ?', Time.zone.parse(params[:completed_after]))
+      end
+      if params[:completed_before].present?
+        @pipeline_items = @pipeline_items.where('completed_at <= ?', Time.zone.parse(params[:completed_before]))
+      end
+    end
+
+    # Entered date filters
+    if params[:entered_after].present?
+      @pipeline_items = @pipeline_items.where('entered_at >= ?', Time.zone.parse(params[:entered_after]))
+    end
+    if params[:entered_before].present?
+      @pipeline_items = @pipeline_items.where('entered_at <= ?', Time.zone.parse(params[:entered_before]))
+    end
+
     @pipeline_items = filter_by_stage if params[:stage_id].present?
     @pipeline_items = search_conversations if params[:search].present?
+  end
+
+  def temporal_range(period)
+    now = Time.current
+    case period
+    when 'last_7d'
+      7.days.ago..now
+    when 'last_30d'
+      30.days.ago..now
+    when 'last_90d'
+      90.days.ago..now
+    when 'last_year'
+      1.year.ago..now
+    when 'this_month'
+      now.beginning_of_month..now
+    when 'this_year'
+      now.beginning_of_year..now
+    end
   end
 
   def apply_sorting
