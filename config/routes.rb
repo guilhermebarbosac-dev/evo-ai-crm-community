@@ -92,6 +92,7 @@ Rails.application.routes.draw do
         get :facebook_posts, on: :member
         post :setup_channel_provider, on: :member
         post :disconnect_channel_provider, on: :member
+        post :sync_whatsapp_subscription, on: :member
         delete :avatar, on: :member
         get :message_templates, on: :member
         post :message_templates, on: :member

@@ -35,6 +35,12 @@ class Channel::Whatsapp < ApplicationRecord
   has_one :inbox, as: :channel, dependent: :destroy
 
   after_create_commit :subscribe
+  # Re-subscribe to webhooks when credentials change (e.g. WhatsApp Cloud
+  # reconnect updates api_key / phone_number_id / waba_id). Without this,
+  # provider_config is updated in the DB but Meta never gets a new
+  # subscribed_apps call, so the number stays disconnected from webhooks.
+  after_update_commit :subscribe,
+                      if: -> { provider == 'whatsapp_cloud' && saved_change_to_provider_config? }
   after_create :sync_templates
   before_destroy :unsubscribe
 

@@ -22,6 +22,7 @@ module Api
           set_agent_bot: 'inboxes.update',
           setup_channel_provider: 'inboxes.update',
           disconnect_channel_provider: 'inboxes.update',
+          sync_whatsapp_subscription: 'inboxes.update',
           avatar: 'inboxes.update',
           message_templates: 'inboxes.message_templates',
           sync_message_templates: 'inboxes.message_templates',
@@ -303,6 +304,28 @@ module Api
           )
         ensure
           channel.update_provider_connection!(connection: 'close') if channel.respond_to?(:update_provider_connection!)
+        end
+
+        # Re-subscribe a WhatsApp Cloud channel to Meta's subscribed_apps endpoint
+        # without going through a full OAuth reconnect. Useful when the credentials
+        # are still valid but the webhook subscription was dropped (number shows as
+        # disconnected even though api_key/waba_id are intact).
+        def sync_whatsapp_subscription
+          channel = @inbox.channel
+
+          unless channel.is_a?(Channel::Whatsapp) && channel.provider == 'whatsapp_cloud'
+            return error_response(
+              ApiErrorCodes::OPERATION_NOT_ALLOWED,
+              'Channel does not support webhook resubscription',
+              status: :unprocessable_entity
+            )
+          end
+
+          channel.subscribe
+          success_response(
+            data: nil,
+            message: 'WhatsApp webhook subscription refreshed successfully'
+          )
         end
 
         # Generic message templates (for all channel types)
