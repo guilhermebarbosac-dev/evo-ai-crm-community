@@ -43,6 +43,16 @@ module Evolution
     config.api_only = true
 
     config.eager_load_paths << Rails.root.join('lib')
+
+    # EvoFlow::EVENT_NAMES is grouped with Events::Types under lib/events/ but
+    # its constant name does not match the Zeitwerk path. The ignore must be
+    # configured before the autoloader is set up (an initializer would run too
+    # late), so it lives here. The file is required explicitly so the constant
+    # is always available and production eager_load does not raise NameError.
+    evo_flow_event_names = Rails.root.join('lib/events/evo_flow_event_names.rb')
+    Rails.autoloaders.main.ignore(evo_flow_event_names)
+    require evo_flow_event_names.to_s
+
     # MCP resources/tools don't follow standard Rails naming patterns
     # Don't add to eager_load_paths - let them be loaded on-demand by Zeitwerk
     # config.eager_load_paths << Rails.root.join('app/mcp')
