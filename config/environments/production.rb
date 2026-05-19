@@ -33,7 +33,12 @@ Rails.application.configure do
   # config.action_dispatch.x_sendfile_header = 'X-Accel-Redirect' # for NGINX
 
   # Store uploaded files on the local file system (see config/storage.yml for options)
-  config.active_storage.service = (GlobalConfigService.load('ACTIVE_STORAGE_SERVICE', ENV.fetch('ACTIVE_STORAGE_SERVICE', 'local')) rescue ENV.fetch('ACTIVE_STORAGE_SERVICE', 'local')).to_sym
+  config.active_storage.service = begin
+    GlobalConfigService.load('ACTIVE_STORAGE_SERVICE', ENV.fetch('ACTIVE_STORAGE_SERVICE', 'local'))
+  rescue StandardError => e
+    warn "[ActiveStorage] GlobalConfigService unavailable at boot (#{e.message}); falling back to ENV"
+    ENV.fetch('ACTIVE_STORAGE_SERVICE', 'local')
+  end.to_sym
 
   # Force all access to the app over SSL, use Strict-Transport-Security, and use secure cookies.
   config.force_ssl = ActiveModel::Type::Boolean.new.cast(ENV.fetch('FORCE_SSL', false))
