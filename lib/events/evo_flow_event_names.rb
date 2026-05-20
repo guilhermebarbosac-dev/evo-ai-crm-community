@@ -1,7 +1,5 @@
 module EvoFlow
   # Canonical list of event names CRM emits to evo-flow.
-  # Story 7.3 (EVO-1238) foundation: declaration only — hard validation
-  # (raise EvoFlow::InvalidEventName) is story 7.5 (EVO-1241).
   # Dot-notation matches the Events::Types convention (lib/events/types.rb).
   EVENT_NAMES = %w[
     contact.created contact.updated contact.deleted
