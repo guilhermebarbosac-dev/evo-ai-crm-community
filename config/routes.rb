@@ -285,6 +285,10 @@ Rails.application.routes.draw do
           post 'whatsapp/evolution_go', to: 'webhooks/whatsapp#process_evolution_go_payload'
           post 'whatsapp/zapi', to: 'webhooks/whatsapp#process_payload'
 
+          # Evolution Hub forwarder: receives both lifecycle events and
+          # Meta-shaped webhook payloads forwarded by the Hub.
+          post 'evolution_hub', to: 'webhooks/evolution_hub#create'
+
           # Telegram webhooks
           post 'telegram/:bot_token', to: 'webhooks/telegram#process_payload'
 

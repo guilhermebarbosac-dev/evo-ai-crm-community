@@ -65,6 +65,16 @@ module Api
         end
 
         def create
+          # Evolution Hub short-circuit: when the feature is enabled and the
+          # caller asked for the Hub flow on a supported channel type, hand
+          # off to EvolutionHub::InboxBuilder which creates the channel,
+          # talks to the Hub (single-shot channel + webhook) and returns a
+          # public connect link the frontend opens in a new tab.
+          if params[:via_hub] && MetaBaseUrl.enabled? &&
+             EvolutionHub::InboxBuilder::SUPPORTED_TYPES.key?(params[:inbox]&.dig(:channel_type).to_s)
+            return create_via_evolution_hub
+          end
+
           ActiveRecord::Base.transaction do
             channel = create_channel
             # Para Telegram, garantir que bot_name esteja disponível
@@ -603,6 +613,36 @@ module Api
         end
 
         private
+
+        # Hub-relayed Inbox creation. Delegates to EvolutionHub::InboxBuilder
+        # and renders the standard InboxSerializer plus the public_link the
+        # frontend uses to open the Hub connect flow in a new tab.
+        def create_via_evolution_hub
+          result = EvolutionHub::InboxBuilder.new(
+            account: Current.account,
+            channel_type: params[:inbox][:channel_type].to_s,
+            name: params[:inbox][:name].to_s
+          ).perform
+
+          @inbox = result[:inbox]
+
+          success_response(
+            data: InboxSerializer.serialize(@inbox).merge(
+              evolution_hub: {
+                public_link: result[:public_link]
+              }
+            ),
+            message: 'Inbox created via Evolution Hub. Open the public link to finish connecting the Meta channel.',
+            status: :created
+          )
+        rescue EvolutionHub::Client::ConfigurationError, EvolutionHub::Client::RequestError => e
+          Rails.logger.error("EvolutionHub inbox creation failed: #{e.class} — #{e.message}")
+          error_response(
+            ApiErrorCodes::INVALID_PARAMETER,
+            "Evolution Hub error: #{e.message}",
+            status: :bad_gateway
+          )
+        end
 
         def fetch_inbox
           @inbox = Inbox.find(params[:id])
