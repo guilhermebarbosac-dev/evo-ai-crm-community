@@ -233,7 +233,7 @@ class Whatsapp::Providers::EvolutionGoService < Whatsapp::Providers::BaseService
       { type: 'reply', displayText: item['title'].to_s.truncate(20), id: item['value'].to_s }
     end
 
-    content = html_to_whatsapp(message.content.to_s)
+    content = interactive_body_text(message)
 
     body = {
       number: clean_number,
@@ -265,7 +265,7 @@ class Whatsapp::Providers::EvolutionGoService < Whatsapp::Providers::BaseService
       { rowId: item['value'].to_s, title: item['title'].to_s.truncate(24), description: '' }
     end
 
-    content = html_to_whatsapp(message.content.to_s)
+    content = interactive_body_text(message)
 
     body = {
       number: clean_number,
