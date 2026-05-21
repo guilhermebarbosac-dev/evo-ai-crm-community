@@ -1,5 +1,9 @@
 # TODO: lets use HTTParty instead of RestClient
-class EvolutionHub
+#
+# Legacy telemetry client (kept for installation/onboarding). The active
+# Evolution Hub *proxy* integration uses the EvolutionHub::* module namespace
+# (lib/evolution_hub/{client,inbox_builder}.rb + app/services/evolution_hub/).
+class EvolutionHubTelemetry
   BASE_URL = ENV.fetch('EVOLUTION_HUB_URL', 'https://localhost:9999')
   PING_URL = "#{BASE_URL}/ping".freeze
   REGISTRATION_URL = "#{BASE_URL}/instances".freeze

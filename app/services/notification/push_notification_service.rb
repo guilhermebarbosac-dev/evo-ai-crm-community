@@ -118,7 +118,7 @@ class Notification::PushNotificationService
     return unless evolution_hub_enabled?
     return unless subscription.fcm?
 
-    EvolutionHub.send_push(fcm_options(subscription))
+    EvolutionHubTelemetry.send_push(fcm_options(subscription))
   end
 
   def firebase_credentials_present?

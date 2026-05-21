@@ -211,6 +211,15 @@ class Channel::Whatsapp < ApplicationRecord
   end
 
   def validate_provider_config
+    # Skip credential validation while the Hub-relayed flow is still pending —
+    # the access_token and phone_number_id are only filled in by the Hub
+    # `channel.connected` webhook, after the operator finishes Meta OAuth.
+    return if hub_pending?
+
     errors.add(:provider_config, 'Invalid Credentials') unless provider_service.validate_provider_config?
+  end
+
+  def hub_pending?
+    provider_config.is_a?(Hash) && provider_config.dig('evolution_hub', 'status') == 'pending'
   end
 end

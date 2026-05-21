@@ -29,7 +29,7 @@ class Installation::OnboardingController < ApplicationController
     ::Redis::Alfred.delete(::Redis::Alfred::EVOLUTION_INSTALLATION_ONBOARDING)
     return if onboarding_params[:subscribe_to_updates].blank?
 
-    EvolutionHub.register_instance(
+    EvolutionHubTelemetry.register_instance(
       onboarding_params.dig(:user, :company),
       onboarding_params.dig(:user, :name),
       onboarding_params.dig(:user, :email)

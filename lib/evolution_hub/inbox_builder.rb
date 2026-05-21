@@ -101,7 +101,7 @@ module EvolutionHub
     end
 
     def create_in_hub(channel)
-      hub_client.create_channel(
+      response = hub_client.create_channel(
         type: hub_channel_type(channel),
         name: @name,
         external_id: channel.id.to_s,
@@ -109,6 +109,21 @@ module EvolutionHub
         webhook_secret: webhook_secret,
         webhook_events: %w[channel_connected channel_disconnected event_received webhook_delivered webhook_failed]
       )
+
+      # The Hub returns 201 even when webhook creation fails server-side
+      # (see channel_service.CreateWithWebhook — we keep the channel and only
+      # set result.WebhookID = nil). Without this guard a misconfigured Hub
+      # would create an orphan channel and lifecycle events would never reach
+      # the CRM, leaving the inbox permanently "pending".
+      if response.is_a?(Hash) && response['webhook_id'].blank?
+        Rails.logger.warn(
+          "EvolutionHub::InboxBuilder: Hub created channel #{response.dig('channel', 'id')} " \
+          "but did NOT create the webhook (webhook_id missing). The inbox will not receive " \
+          "lifecycle events. Check Hub logs for 'CreateWithWebhook' warnings."
+        )
+      end
+
+      response
     end
 
     def persist_hub_metadata(channel, hub_response)

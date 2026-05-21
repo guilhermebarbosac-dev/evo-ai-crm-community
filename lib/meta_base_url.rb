@@ -20,15 +20,22 @@ module MetaBaseUrl
   KINDS = %i[whatsapp facebook instagram].freeze
 
   class << self
-    # Returns the base URL prefix INCLUDING the API version segment.
+    # Returns the base URL prefix.
+    #
+    # Hub OFF — includes the Graph API version segment, since callers hit
+    # `graph.facebook.com` / `graph.instagram.com` directly.
+    # Hub ON  — version is dropped: the Hub's /meta/* proxy abstracts the API
+    # version internally and rejects calls that include it (404 on the
+    # extra path segment).
+    #
     # Examples:
     #   MetaBaseUrl.for(:whatsapp)  # => "https://graph.facebook.com/v23.0" (Hub OFF)
-    #                                 # => "https://api.evohub.ai/meta/v23.0" (Hub ON)
+    #                                 # => "https://api.evohub.ai/meta" (Hub ON)
     def for(kind)
       kind = normalize(kind)
 
       if enabled?
-        "#{hub_url}/meta/#{META_API_VERSION}"
+        "#{hub_url}/meta"
       else
         case kind
         when :instagram then "https://graph.instagram.com/#{META_API_VERSION}"
