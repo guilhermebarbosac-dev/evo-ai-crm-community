@@ -29,6 +29,14 @@ class Channel::FacebookPage < ApplicationRecord
   after_create_commit :subscribe
   before_destroy :unsubscribe
 
+  def hub_pending?
+    evolution_hub_meta.is_a?(Hash) && evolution_hub_meta['status'] == 'pending'
+  end
+
+  def hub_active?
+    evolution_hub_meta.is_a?(Hash) && evolution_hub_meta['status'] == 'active'
+  end
+
   def name
     'Facebook'
   end
@@ -42,6 +50,11 @@ class Channel::FacebookPage < ApplicationRecord
   end
 
   def subscribe
+    # In Hub mode the Hub already subscribed the page on its side; CRM has no
+    # app token to do it. Also skip while pending — page_access_token is empty.
+    return if MetaBaseUrl.enabled?
+    return if hub_pending?
+
     # ref https://developers.facebook.com/docs/messenger-platform/reference/webhook-events
     fields = %w[messages message_deliveries message_echoes message_reads standby messaging_handovers feed]
 
@@ -65,6 +78,8 @@ class Channel::FacebookPage < ApplicationRecord
   private
 
   def unsubscribe
+    return true if MetaBaseUrl.enabled?
+
     Facebook::Messenger::Subscriptions.unsubscribe(access_token: page_access_token)
   rescue StandardError => e
     Rails.logger.debug { "Rescued: #{e.inspect}" }

@@ -23,12 +23,25 @@ class Channel::Instagram < ApplicationRecord
 
   AUTHORIZATION_ERROR_THRESHOLD = 1
 
-  validates :access_token, presence: true
-  validates :instagram_id, uniqueness: true, presence: true
+  # Skip the credential presence checks while the Hub-relayed flow is still
+  # pending — the access_token and real instagram_id are only filled in by
+  # the Hub `channel_connected` lifecycle webhook, after the operator finishes
+  # Meta OAuth at the Hub's public link.
+  validates :access_token, presence: true, unless: :hub_pending?
+  validates :instagram_id, uniqueness: true
+  validates :instagram_id, presence: true, unless: :hub_pending?
 
   after_create_commit :subscribe
   after_update_commit :resubscribe_if_token_changed
   before_destroy :unsubscribe
+
+  def hub_pending?
+    evolution_hub_meta.is_a?(Hash) && evolution_hub_meta['status'] == 'pending'
+  end
+
+  def hub_active?
+    evolution_hub_meta.is_a?(Hash) && evolution_hub_meta['status'] == 'active'
+  end
 
   def name
     'Instagram'
@@ -43,6 +56,13 @@ class Channel::Instagram < ApplicationRecord
   end
 
   def subscribe
+    # In Hub mode the Hub already subscribed the IG user on its side with the
+    # real Meta app token; the CRM doesn't have that token and shouldn't try.
+    return if MetaBaseUrl.enabled?
+    # Also skip while still pending — instagram_id is a placeholder until the
+    # operator finishes OAuth at the Hub.
+    return if hub_pending?
+
     # ref https://developers.facebook.com/docs/instagram-platform/webhooks#enable-subscriptions
     Rails.logger.info("Instagram: Subscribing to webhooks for instagram_id=#{instagram_id}")
 
@@ -68,6 +88,8 @@ class Channel::Instagram < ApplicationRecord
   end
 
   def unsubscribe
+    return true if MetaBaseUrl.enabled?
+
     HTTParty.delete(
       "https://graph.instagram.com/v23.0/#{instagram_id}/subscribed_apps",
       query: {
