@@ -2,12 +2,13 @@
 #
 # Table name: channel_instagram
 #
-#  id           :uuid             not null, primary key
-#  access_token :string           not null
-#  expires_at   :datetime         not null
-#  created_at   :datetime         not null
-#  updated_at   :datetime         not null
-#  instagram_id :string           not null
+#  id                 :uuid             not null, primary key
+#  access_token       :string           not null
+#  evolution_hub_meta :jsonb            not null
+#  expires_at         :datetime         not null
+#  created_at         :datetime         not null
+#  updated_at         :datetime         not null
+#  instagram_id       :string           not null
 #
 # Indexes
 #
@@ -17,6 +18,7 @@ class Channel::Instagram < ApplicationRecord
   include Channelable
   include Reauthorizable
   include ChannelMessageTemplates
+  include EvolutionHubChannelCleanup
   self.table_name = 'channel_instagram'
 
   AUTHORIZATION_ERROR_THRESHOLD = 1

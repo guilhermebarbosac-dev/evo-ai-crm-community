@@ -2,13 +2,14 @@
 #
 # Table name: channel_facebook_pages
 #
-#  id                :uuid             not null, primary key
-#  page_access_token :string           not null
-#  user_access_token :string           not null
-#  created_at        :datetime         not null
-#  updated_at        :datetime         not null
-#  instagram_id      :string
-#  page_id           :string           not null
+#  id                 :uuid             not null, primary key
+#  evolution_hub_meta :jsonb            not null
+#  page_access_token  :string           not null
+#  user_access_token  :string           not null
+#  created_at         :datetime         not null
+#  updated_at         :datetime         not null
+#  instagram_id       :string
+#  page_id            :string           not null
 #
 # Indexes
 #
@@ -19,6 +20,7 @@ class Channel::FacebookPage < ApplicationRecord
   include Channelable
   include Reauthorizable
   include ChannelMessageTemplates
+  include EvolutionHubChannelCleanup
 
   self.table_name = 'channel_facebook_pages'
 

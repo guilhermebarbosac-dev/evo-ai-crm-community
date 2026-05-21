@@ -49,11 +49,18 @@ end
 if resource.facebook?
   json.page_id resource.channel.try(:page_id)
   json.reauthorization_required resource.channel.try(:reauthorization_required?)
+  # Hub-relayed channels carry the Hub connect link / status here. The frontend
+  # uses public_link to render Reconnect against the Hub instead of the native
+  # Facebook OAuth.
+  json.evolution_hub_meta resource.channel.try(:evolution_hub_meta)
 end
 
 ## Instagram Attributes
-json.reauthorization_required resource.channel.try(:reauthorization_required?) if resource.instagram?
-json.instagram_id resource.channel.try(:instagram_id) if resource.instagram?
+if resource.instagram?
+  json.reauthorization_required resource.channel.try(:reauthorization_required?)
+  json.instagram_id resource.channel.try(:instagram_id)
+  json.evolution_hub_meta resource.channel.try(:evolution_hub_meta)
+end
 
 ## Twilio Attributes
 json.messaging_service_sid resource.channel.try(:messaging_service_sid)

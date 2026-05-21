@@ -19,6 +19,7 @@ class Channel::Whatsapp < ApplicationRecord
   include Channelable
   include Reauthorizable
   include ChannelMessageTemplates
+  include EvolutionHubChannelCleanup
 
   self.table_name = 'channel_whatsapp'
   EDITABLE_ATTRS = [:phone_number, :provider, { provider_config: {} }].freeze
@@ -159,6 +160,10 @@ class Channel::Whatsapp < ApplicationRecord
 
   def subscribe
     return unless provider == 'whatsapp_cloud'
+    # In Hub mode the Hub already subscribed the WABA on its side using the
+    # real Meta app token. The CRM doesn't hold that token and doesn't need
+    # to re-subscribe — webhooks reach us via the Hub's relay.
+    return if MetaBaseUrl.enabled?
     return unless provider_config['waba_id'].present? && provider_config['api_key'].present?
 
     # ref https://developers.facebook.com/docs/whatsapp/business-platform/webhooks#subscription
@@ -177,6 +182,7 @@ class Channel::Whatsapp < ApplicationRecord
 
   def unsubscribe
     return unless provider == 'whatsapp_cloud'
+    return if MetaBaseUrl.enabled?
     return unless provider_config['waba_id'].present? && provider_config['api_key'].present?
 
     HTTParty.delete(
@@ -215,11 +221,20 @@ class Channel::Whatsapp < ApplicationRecord
     # the access_token and phone_number_id are only filled in by the Hub
     # `channel.connected` webhook, after the operator finishes Meta OAuth.
     return if hub_pending?
+    # In Hub mode we authenticate Meta calls with the Hub channel_token (the
+    # Hub swaps it for the Meta access_token internally), so the local
+    # `api_key` is intentionally empty and the validator's "Bearer api_key"
+    # health check would fail. Trust the Hub's connect lifecycle here.
+    return if hub_active?
 
     errors.add(:provider_config, 'Invalid Credentials') unless provider_service.validate_provider_config?
   end
 
   def hub_pending?
     provider_config.is_a?(Hash) && provider_config.dig('evolution_hub', 'status') == 'pending'
+  end
+
+  def hub_active?
+    provider_config.is_a?(Hash) && provider_config.dig('evolution_hub', 'status') == 'active'
   end
 end

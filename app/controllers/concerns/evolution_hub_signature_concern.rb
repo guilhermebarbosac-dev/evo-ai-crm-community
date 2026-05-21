@@ -23,14 +23,25 @@ module EvolutionHubSignatureConcern
 
     provided = request.headers[HEADER].to_s
     unless provided.start_with?('sha256=')
-      Rails.logger.warn('EvolutionHub webhook: refused — missing or malformed signature header')
+      Rails.logger.warn(
+        "EvolutionHub webhook: refused — missing or malformed signature header. " \
+        "Got=#{provided.inspect[0, 80]}, body_size=#{request.raw_post.bytesize}, " \
+        "headers_hub=#{request.headers.env.select { |k, _| k.to_s.match?(/HUB|SIGNATURE/i) }.inspect[0, 200]}"
+      )
       head :unauthorized
       return
     end
 
-    expected = "sha256=#{OpenSSL::HMAC.hexdigest(OpenSSL::Digest.new('sha256'), secret, request.raw_post)}"
+    body = request.raw_post
+    expected = "sha256=#{OpenSSL::HMAC.hexdigest(OpenSSL::Digest.new('sha256'), secret, body)}"
     unless ActiveSupport::SecurityUtils.secure_compare(expected, provided)
-      Rails.logger.warn('EvolutionHub webhook: refused — signature mismatch')
+      Rails.logger.warn(
+        "EvolutionHub webhook: refused — signature mismatch. " \
+        "expected=#{expected[0, 20]}...#{expected[-8..]} " \
+        "provided=#{provided[0, 20]}...#{provided[-8..]} " \
+        "body_size=#{body.bytesize} secret_len=#{secret.length} " \
+        "body_head=#{body[0, 60].inspect} body_tail=#{body[-30..].inspect}"
+      )
       head :unauthorized
       return
     end

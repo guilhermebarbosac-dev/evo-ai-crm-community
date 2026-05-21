@@ -49,7 +49,11 @@ module EvolutionHub
     end
 
     def crm_webhook_url
-      base = ENV.fetch('FRONTEND_URL') { Rails.application.routes.default_url_options[:host] || 'http://localhost:3000' }
+      # BACKEND_URL is the project-wide convention for the Rails API's public
+      # origin (see config/environments/{development,staging,production}.rb).
+      # The Hub calls this URL directly — it must be reachable from the Hub,
+      # not the operator's browser, so the front-end URL is not what we want.
+      base = ENV.fetch('BACKEND_URL', 'http://localhost:3000')
       "#{base.chomp('/')}/webhooks/evolution_hub"
     end
 

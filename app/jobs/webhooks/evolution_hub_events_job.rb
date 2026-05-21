@@ -15,8 +15,12 @@
 #
 # Dedup is by X-Hub-Delivery-Id passed in from the controller, using a Redis
 # SETNX with 5min TTL. Same dispatcher retries → same delivery id → skipped.
-class Webhooks::EvolutionHubEventsJob < ApplicationJob
-  queue_as :default
+module Webhooks
+  # Nested style (open the module first) so Sidekiq 8's deserializer can resolve
+  # `Webhooks::EvolutionHubEventsJob` via Object.const_get even when the
+  # constant cache hasn't autoloaded the namespace yet at retry time.
+  class EvolutionHubEventsJob < ApplicationJob
+    queue_as :default
 
   DEDUP_TTL_SECONDS = 300
 
@@ -78,13 +82,24 @@ class Webhooks::EvolutionHubEventsJob < ApplicationJob
   end
 
   def forward_to_meta_pipeline(raw_body, payload)
+    # The per-platform jobs (Whatsapp/Facebook/InstagramEventsJob) read params
+    # with symbol keys (`params[:object]`, `params[:instance]`, etc.). The
+    # native Webhooks::WhatsappController uses `params.to_unsafe_hash`, which
+    # gives an ActionController::Parameters-backed hash with indifferent
+    # access — symbol *and* string keys both work. Our JSON.parse produces a
+    # plain string-keyed Hash, so we must wrap it before enqueueing or every
+    # `params[:object]` lookup downstream returns nil and the job logs
+    # "no channel found for params {}".
+    forward_payload = payload.with_indifferent_access
+
     case payload['object']
     when 'whatsapp_business_account'
-      Webhooks::WhatsappEventsJob.perform_later(raw_body) if defined?(Webhooks::WhatsappEventsJob)
+      Webhooks::WhatsappEventsJob.perform_later(forward_payload) if defined?(Webhooks::WhatsappEventsJob)
     when 'page'
-      Webhooks::FacebookEventsJob.perform_later(raw_body)
+      Webhooks::FacebookEventsJob.perform_later(forward_payload)
     when 'instagram'
-      Webhooks::InstagramEventsJob.perform_later(raw_body) if defined?(Webhooks::InstagramEventsJob)
+      Webhooks::InstagramEventsJob.perform_later(forward_payload) if defined?(Webhooks::InstagramEventsJob)
     end
+  end
   end
 end

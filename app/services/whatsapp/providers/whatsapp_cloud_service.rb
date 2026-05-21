@@ -92,8 +92,24 @@ module Whatsapp
       end
 
       def api_headers
-        { 'Authorization' => "Bearer #{whatsapp_channel.provider_config['api_key']}",
+        { 'Authorization' => "Bearer #{meta_bearer_token}",
           'Content-Type' => 'application/json' }
+      end
+
+      # When the Evolution Hub is enabled, all Meta calls go through the Hub's
+      # transparent proxy at api.evohub.ai/meta/*. The Hub identifies the
+      # channel by the channel_token (returned at create time, stored under
+      # provider_config['evolution_hub']['channel_token']) and swaps it for
+      # the real Meta access_token internally. So we never need to persist
+      # the Meta token locally in Hub mode — and we couldn't, since the Hub
+      # doesn't expose it.
+      def meta_bearer_token
+        if MetaBaseUrl.enabled?
+          whatsapp_channel.provider_config.dig('evolution_hub', 'channel_token').presence ||
+            whatsapp_channel.provider_config['api_key']
+        else
+          whatsapp_channel.provider_config['api_key']
+        end
       end
 
       def media_url(media_id)
@@ -389,7 +405,7 @@ module Whatsapp
         response = File.open(file_path, 'rb') do |file_io|
           HTTParty.post(
             "#{phone_id_path}/media",
-            headers: { 'Authorization' => "Bearer #{whatsapp_channel.provider_config['api_key']}" },
+            headers: { 'Authorization' => "Bearer #{meta_bearer_token}" },
             multipart: true,
             body: {
               messaging_product: 'whatsapp',
