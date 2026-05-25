@@ -89,4 +89,24 @@ RSpec.describe Whatsapp::EvolutionHandlers::MessagesUpdate do
       end
     end
   end
+
+  # AC3 / L-6: exercise the REAL funnel (no mock of Messages::StatusUpdateService)
+  # to prove failed→delivered cannot un-fail a message through the Evolution API
+  # channel. Catches future regressions where the funnel's failed-final guard
+  # is removed but channel specs (which mock the service) stay green.
+  describe '#update_status — funnel e2e (no service mock)' do
+    it 'AC3 e2e: real funnel rejects failed→delivered' do
+      failed_message = instance_double(
+        Message, status: 'failed', failed?: true, read?: false, delivered?: false,
+                 content_attributes: {}
+      )
+      host.instance_variable_set(:@message, failed_message)
+      host.instance_variable_set(:@raw_message, { status: 'DELIVERY_ACK' })
+      allow(host).to receive(:refresh_conversation_activity)
+      allow(Message).to receive(:statuses).and_return('sent' => 0, 'delivered' => 1, 'read' => 2, 'failed' => 3)
+
+      expect(failed_message).not_to receive(:update!)
+      host.send(:update_status)
+    end
+  end
 end

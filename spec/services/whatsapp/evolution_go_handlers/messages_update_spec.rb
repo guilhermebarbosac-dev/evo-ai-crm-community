@@ -45,9 +45,12 @@ RSpec.describe Whatsapp::EvolutionGoHandlers::MessagesUpdate do
       host.send(:update_message_status, message, { status: 'BOGUS' }, 'msg-1')
     end
 
-    it 'does not invoke the service when the mapped status equals the current status' do
+    # After EVO-1239: the local same-status guard was removed; the funnel
+    # handles this universally. Service is now invoked but returns false.
+    it 'delegates to the funnel for same-status updates (funnel rejects)' do
       delivered_message = instance_double(Message, status: 'delivered')
-      expect(Messages::StatusUpdateService).not_to receive(:new)
+      rejecting = instance_double(Messages::StatusUpdateService, perform: false)
+      expect(Messages::StatusUpdateService).to receive(:new).with(delivered_message, 'delivered').and_return(rejecting)
       host.send(:update_message_status, delivered_message, { status: 'DELIVERY_ACK' }, 'msg-1')
     end
   end

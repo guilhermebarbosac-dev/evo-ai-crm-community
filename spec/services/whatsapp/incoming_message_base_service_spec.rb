@@ -80,4 +80,23 @@ RSpec.describe Whatsapp::IncomingMessageBaseService do
       end
     end
   end
+
+  # AC9 / L-6: exercise the REAL funnel via WhatsApp Cloud — proves that a
+  # duplicate `delivered` webhook (Meta retries are common) does NOT re-emit
+  # the Wisper event a second time, which would otherwise flow through the
+  # EvoFlow listener as a bogus `message.read`.
+  describe '#update_message_with_status — funnel e2e (no service mock)' do
+    it 'AC9 e2e: duplicate delivered webhook produces only one Wisper publish' do
+      already_delivered = instance_double(
+        Message, id: 42, status: 'delivered', delivered?: true, read?: false, failed?: false,
+                 content_attributes: {}
+      )
+      allow(Message).to receive(:statuses).and_return('sent' => 0, 'delivered' => 1, 'read' => 2, 'failed' => 3)
+
+      # The funnel's same-status guard should short-circuit BEFORE update! and
+      # BEFORE any Wisper publish. We assert the side-effect contract directly.
+      expect(already_delivered).not_to receive(:update!)
+      service.send(:update_message_with_status, already_delivered, { status: 'delivered', id: 'wamid.xxx' })
+    end
+  end
 end

@@ -25,21 +25,27 @@ RSpec.describe Whatsapp::BaileysHandlers::MessagesUpdate do
   before { allow(host).to receive(:incoming?).and_return(false) }
 
   describe '#update_status' do
-    it 'rejects delivered→sent without invoking the service' do
+    # Baileys delegates ALL status transitions to
+    # Messages::StatusUpdateService — same-status, read-final, failed-final,
+    # and delivered→sent are now barred inside the funnel. The service is
+    # always invoked but returns false for invalid transitions.
+    it 'delegates delivered→sent to the funnel (service rejects)' do
       message = instance_double(Message, status: 'delivered', delivered?: true, read?: false)
       host.instance_variable_set(:@message, message)
       host.instance_variable_set(:@raw_message, { update: { status: 2 } })
 
-      expect(Messages::StatusUpdateService).not_to receive(:new)
+      rejecting = instance_double(Messages::StatusUpdateService, perform: false)
+      expect(Messages::StatusUpdateService).to receive(:new).with(message, 'sent').and_return(rejecting)
       host.send(:update_status)
     end
 
-    it 'rejects any transition from read (read is final)' do
+    it 'delegates transitions from read to the funnel (service rejects)' do
       message = instance_double(Message, status: 'read', read?: true, delivered?: false)
       host.instance_variable_set(:@message, message)
       host.instance_variable_set(:@raw_message, { update: { status: 0 } }) # ERROR → failed
 
-      expect(Messages::StatusUpdateService).not_to receive(:new)
+      rejecting = instance_double(Messages::StatusUpdateService, perform: false)
+      expect(Messages::StatusUpdateService).to receive(:new).with(message, 'failed').and_return(rejecting)
       host.send(:update_status)
     end
 
@@ -59,6 +65,25 @@ RSpec.describe Whatsapp::BaileysHandlers::MessagesUpdate do
       allow(host).to receive_messages(incoming?: true, update_last_seen_at: nil)
 
       expect(Messages::StatusUpdateService).to receive(:new).with(message, 'read').and_return(status_service)
+      host.send(:update_status)
+    end
+  end
+
+  # AC9 / L-6: exercise the REAL funnel (no mock of Messages::StatusUpdateService)
+  # to prove the funnel's same-status guard works end-to-end through the Baileys
+  # channel. Without this, a future regression in valid_status_transition? would
+  # not be caught by channel specs that mock the service.
+  describe '#update_status — funnel e2e (no service mock)' do
+    it 'AC4 e2e: real funnel barres delivered→sent regression' do
+      message = instance_double(
+        Message, status: 'delivered', delivered?: true, read?: false, failed?: false,
+                 content_attributes: {}
+      )
+      host.instance_variable_set(:@message, message)
+      host.instance_variable_set(:@raw_message, { update: { status: 2 } }) # SERVER_ACK → sent
+      allow(Message).to receive(:statuses).and_return('sent' => 0, 'delivered' => 1, 'read' => 2, 'failed' => 3)
+
+      expect(message).not_to receive(:update!)
       host.send(:update_status)
     end
   end

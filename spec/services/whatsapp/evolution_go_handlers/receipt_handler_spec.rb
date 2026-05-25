@@ -66,4 +66,42 @@ RSpec.describe Whatsapp::EvolutionGoHandlers::ReceiptHandler do
       )
     end
   end
+
+  # AC10 / L-6: pre-bulk filter (`can_update_message_status?`) must keep
+  # parity with the canonical funnel rules so that update_all does not
+  # write terminal-state regressions. Tested at the predicate level since
+  # this is the only barrier in the bulk path.
+  describe '#can_update_message_status? — funnel parity' do
+    let(:msg) { ->(status) { instance_double(Message, status: status) } }
+
+    it 'rejects same-status (delivered → delivered) — F-1 parity' do
+      expect(host.send(:can_update_message_status?, msg.call('delivered'), 'delivered')).to be(false)
+    end
+
+    it 'rejects transitions out of read (read final)' do
+      %w[sent delivered failed].each do |target|
+        expect(host.send(:can_update_message_status?, msg.call('read'), target)).to be(false)
+      end
+    end
+
+    it 'rejects transitions out of failed (failed final)' do
+      %w[sent delivered read].each do |target|
+        expect(host.send(:can_update_message_status?, msg.call('failed'), target)).to be(false)
+      end
+    end
+
+    it 'rejects delivered → sent regression' do
+      expect(host.send(:can_update_message_status?, msg.call('delivered'), 'sent')).to be(false)
+    end
+
+    it 'accepts sent → delivered/read/failed' do
+      %w[delivered read failed].each do |target|
+        expect(host.send(:can_update_message_status?, msg.call('sent'), target)).to be(true)
+      end
+    end
+
+    it 'accepts delivered → read' do
+      expect(host.send(:can_update_message_status?, msg.call('delivered'), 'read')).to be(true)
+    end
+  end
 end

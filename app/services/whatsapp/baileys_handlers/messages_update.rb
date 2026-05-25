@@ -30,11 +30,6 @@ module Whatsapp::BaileysHandlers::MessagesUpdate
     status = status_mapper
     update_last_seen_at if incoming? && status == 'read'
     return if status.blank?
-    # Baileys-specific rules NOT in Messages::StatusUpdateService:
-    #  - read is final (no downgrade to anything)
-    #  - delivered must not downgrade back to sent
-    return if @message.read?
-    return if @message.delivered? && status == 'sent'
 
     Messages::StatusUpdateService.new(@message, status).perform
   end

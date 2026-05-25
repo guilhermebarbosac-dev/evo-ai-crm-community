@@ -62,9 +62,6 @@ module Whatsapp::EvolutionGoHandlers::MessagesUpdate
     # Map Evolution Go status to Evolution status
     status = map_evolution_go_status_to_evolution(update[:status])&.to_s
     return unless status
-    # Skip same-status updates: they would re-emit Wisper events the
-    # EvoFlow listener cannot map and would log as warn.
-    return if message.status.to_s == status
 
     Rails.logger.info "Evolution Go API: Updating message #{raw_message_id} status to #{status}"
 
