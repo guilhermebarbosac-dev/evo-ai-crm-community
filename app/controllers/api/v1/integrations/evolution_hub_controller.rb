@@ -36,6 +36,16 @@ class Api::V1::Integrations::EvolutionHubController < Api::V1::BaseController
     handle_hub_error(e)
   end
 
+  # Preview de canais já existentes no Hub. Usado pela tela de Settings
+  # do EvoCRM pra confirmar que a integração está OK e mostrar o que
+  # já está lá.
+  def channels
+    payload = hub_client.list_channels
+    render json: payload, status: :ok
+  rescue EvolutionHub::Client::ConfigurationError, EvolutionHub::Client::RequestError => e
+    handle_hub_error(e)
+  end
+
   private
 
   def hub_client

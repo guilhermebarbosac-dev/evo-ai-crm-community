@@ -93,6 +93,15 @@ module EvolutionHub
       get_json('/api/v1/me/plan')
     end
 
+    # GET /api/v1/channels — lista canais já criados no Hub pelo tenant.
+    # Usado pela tela de Settings do EvoCRM pra mostrar preview de
+    # "canais existentes no Evolution Hub" depois que o admin cola
+    # API URL + token. Hub devolve { "channels": [...] } com cada item
+    # contendo id, name, type, status, channel_credentials_id, etc.
+    def list_channels
+      get_json('/api/v1/channels')
+    end
+
     # GET /api/v1/auth/me — used by EvolutionHubTestService and as a generic
     # "Hub is up and credentials are valid" probe.
     def get_me
