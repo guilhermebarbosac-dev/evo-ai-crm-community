@@ -52,6 +52,17 @@ module EvoFlow
       raise EvoFlow::HTTPError.new("evo-flow request failed: #{e.message}", nil, nil)
     end
 
+    def get(path, params = {})
+      response = self.class.get(join(@api_url, path),
+                                query: params.compact,
+                                headers: request_headers,
+                                timeout: @timeout)
+      handle_response(response)
+    rescue HTTParty::Error, SocketError, Timeout::Error, SystemCallError,
+           OpenSSL::SSL::SSLError => e
+      raise EvoFlow::HTTPError.new("evo-flow request failed: #{e.message}", nil, nil)
+    end
+
     private
 
     def validate_config!

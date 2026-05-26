@@ -106,6 +106,66 @@ RSpec.describe EvoFlow::Client do
     end
   end
 
+  describe '#get' do
+    let(:events_path) { '/contacts/42/events' }
+    let(:events_url) { "#{api_url}/contacts/42/events" }
+
+    it 'GETs the full /api/v1 URL with the integration API key header and returns parsed body' do
+      stub = stub_request(:get, events_url)
+             .with(
+               query: { 'limit' => '10' },
+               headers: { 'X-Integration-API-Key' => api_key }
+             )
+             .to_return(
+               status: 200,
+               body: { events: [], pagination: { hasNext: false } }.to_json,
+               headers: { 'Content-Type' => 'application/json' }
+             )
+
+      result = client.get(events_path, limit: 10)
+
+      expect(stub).to have_been_requested
+      expect(result).to include('events' => [])
+      expect(result['pagination']).to include('hasNext' => false)
+    end
+
+    it 'omits keys whose value is nil from the outbound query string (params.compact)' do
+      stub = stub_request(:get, events_url)
+             .with(query: hash_including('limit' => '10'))
+             .to_return(status: 200, body: '{}', headers: { 'Content-Type' => 'application/json' })
+
+      client.get(events_path, limit: 10, cursor: nil)
+
+      expect(stub).to have_been_requested
+      expect(WebMock).not_to have_requested(:get, events_url).with(query: hash_including('cursor'))
+    end
+
+    it 'raises EvoFlow::HTTPError with code 500 on upstream 5xx' do
+      stub_request(:get, events_url).to_return(status: 500, body: 'boom')
+
+      expect { client.get(events_path) }
+        .to raise_error(EvoFlow::HTTPError) { |error|
+          expect(error.code).to eq(500)
+          expect(error.response.body).to eq('boom')
+        }
+    end
+
+    it 'raises EvoFlow::HTTPError with code 404 on upstream 4xx' do
+      stub_request(:get, events_url).to_return(status: 404, body: { error: 'nope' }.to_json,
+                                               headers: { 'Content-Type' => 'application/json' })
+
+      expect { client.get(events_path) }
+        .to raise_error(EvoFlow::HTTPError) { |error| expect(error.code).to eq(404) }
+    end
+
+    it 'raises EvoFlow::HTTPError with nil code on a network timeout' do
+      stub_request(:get, events_url).to_timeout
+
+      expect { client.get(events_path) }
+        .to raise_error(EvoFlow::HTTPError) { |error| expect(error.code).to be_nil }
+    end
+  end
+
   describe 'configuration safety' do
     it 'raises ConfigurationError when the API key is blank (F13)' do
       expect { described_class.new(api_url: api_url, api_key: '') }
