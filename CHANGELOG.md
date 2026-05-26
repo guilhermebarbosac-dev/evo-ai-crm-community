@@ -9,11 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- N/A
+- **EVO-1239** — Wisper `:message_status_changed` agora é emitido por todos os providers WhatsApp (Cloud, 360-dialog, Evolution API, Evolution Go single/bulk, Baileys), Telegram (delivered + failed) e Email/SMTP (delivered + bounce DSN). Inclui novo `BounceMailbox` parseando DSN RFC 3464 (Status `5.x.x` → failed; `4.x.x` apenas logado).
 
 ### Changed
 
-- N/A
+- **EVO-1239** — Telegram `send_on_telegram` passa a registrar status `delivered` após envio bem-sucedido. Read receipts não são suportados pela Bot API (Telegram limitation) e portanto `read` permanece n/a neste canal.
 
 ### Fixed
 

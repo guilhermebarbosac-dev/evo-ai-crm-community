@@ -7,6 +7,7 @@ module EvoFlow
     conversation.created conversation.resolved
     message.created message.delivered message.read message.failed
     campaign.triggered campaign.message.sent campaign.message.opened campaign.message.clicked
+    custom
   ].freeze
 
   # Feature gate. Primary ENV is `EVO_FLOW_ENABLED`; legacy
