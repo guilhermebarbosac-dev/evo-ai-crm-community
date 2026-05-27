@@ -3,10 +3,10 @@ require 'rails_helper'
 RSpec.describe EvoFlow::BackfillMapper do
   describe '.map_reporting_event_to_event_name' do
     {
-      'conversation_resolved'     => 'conversation.resolved',
-      'first_response'            => 'conversation.first_reply',
-      'reply_time'                => 'conversation.reply_time',
-      'conversation_bot_handoff'  => 'conversation.bot_handoff',
+      'conversation_resolved' => 'conversation.resolved',
+      'first_response' => 'conversation.first_reply',
+      'reply_time' => 'conversation.reply_time',
+      'conversation_bot_handoff' => 'conversation.bot_handoff',
       'conversation_bot_resolved' => 'conversation.bot_resolved'
     }.each do |legacy_name, canonical|
       it "maps #{legacy_name.inspect} to #{canonical.inspect}" do

@@ -4,10 +4,10 @@ module EvoFlow
   class BackfillFailureBroadcaster
     include Wisper::Publisher
 
-    def broadcast_failed(account_id:, source:, error:)
+    def broadcast_failed(account_id:, error:)
       publish(
         'evo_flow_backfill_failed',
-        data: { account_id: account_id, source: source, error: error }
+        data: { account_id: account_id, error: error }
       )
     end
 

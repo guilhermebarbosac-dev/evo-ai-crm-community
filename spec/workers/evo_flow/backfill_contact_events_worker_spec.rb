@@ -24,11 +24,11 @@ RSpec.describe EvoFlow::BackfillContactEventsWorker, type: :worker do
   end
 
   def uuid(suffix)
-    format('%08x-%04x-%04x-%04x-%012x', suffix, 0, 0, 0, suffix)
+    format('%<a>08x-%<b>04x-%<c>04x-%<d>04x-%<e>012x', a: suffix, b: 0, c: 0, d: 0, e: suffix)
   end
 
   def build_relation_stub(model_constant, records)
-    relation = double("#{model_constant}Relation")
+    relation = instance_double(ActiveRecord::Relation, table_name: "#{model_constant}Relation")
     %i[where order joins].each do |chain|
       allow(relation).to receive(chain).and_return(relation)
     end
@@ -82,15 +82,31 @@ RSpec.describe EvoFlow::BackfillContactEventsWorker, type: :worker do
   end
 
   describe 'integration feature gate (M1)' do
-    it 'short-circuits when EvoFlow.enabled? is false' do
+    it 'short-circuits when EvoFlow.enabled? is false (DRY_RUN=true)' do
       allow(EvoFlow).to receive(:enabled?).and_return(false)
       stub_message_relation([build_message(id: uuid(10))])
       stub_reporting_event_relation([])
       allow(Rails.logger).to receive(:warn)
 
-      described_class.new.perform(nil, 'dry_run' => false)
+      described_class.new.perform(nil, 'dry_run' => true)
 
       expect(client).not_to have_received(:post_batch)
+      expect(Rails.logger).to have_received(:warn).with(/integration is disabled/)
+    end
+
+    # H1 (2nd review): when DRY_RUN=false and integration disabled, the
+    # enabled? gate must fire BEFORE Client.new — otherwise the worker
+    # raises ConfigurationError and emits a misleading :evo_flow_backfill_dropped
+    # broadcast for what is really a feature-flag state.
+    it 'short-circuits BEFORE instantiating Client when DRY_RUN=false and disabled' do
+      allow(EvoFlow).to receive(:enabled?).and_return(false)
+      stub_message_relation([])
+      stub_reporting_event_relation([])
+      allow(Rails.logger).to receive(:warn)
+
+      described_class.new.perform(nil, 'dry_run' => false)
+
+      expect(EvoFlow::Client).not_to have_received(:new)
       expect(Rails.logger).to have_received(:warn).with(/integration is disabled/)
     end
   end
@@ -106,16 +122,19 @@ RSpec.describe EvoFlow::BackfillContactEventsWorker, type: :worker do
       expect(fake_alfred.keys.grep(/^backfill:cursor:/)).to be_empty
     end
 
-    it 'logs would_backfill summary and a single sample_payload line' do
+    it 'logs would_backfill summary and one sample_payload line per source (M2)' do
       stub_message_relation([build_message(id: uuid(10)), build_message(id: uuid(11))])
-      stub_reporting_event_relation([])
+      stub_reporting_event_relation([build_reporting_event(id: uuid(20))])
       logged = []
       allow(Rails.logger).to receive(:info) { |m| logged << m }
 
       described_class.new.perform(nil, 'dry_run' => true)
 
       expect(logged.grep(/would_backfill .*type=message count=2/)).not_to be_empty
-      expect(logged.grep(/sample_payload=/).size).to eq(1)
+      expect(logged.grep(/would_backfill .*type=reporting_event count=1/)).not_to be_empty
+      # One sample per source — Message + ReportingEvent (2 total).
+      expect(logged.grep(/sample_payload source=message/).size).to eq(1)
+      expect(logged.grep(/sample_payload source=reporting_event/).size).to eq(1)
     end
   end
 
@@ -172,7 +191,7 @@ RSpec.describe EvoFlow::BackfillContactEventsWorker, type: :worker do
       relation = stub_message_relation(records)
       stub_reporting_event_relation([])
       cursor_value = uuid(5)
-      window = (Time.current - 1.year).utc.strftime('%Y-%m-%d')
+      window = (1.year.ago).utc.strftime('%Y-%m-%d')
       fake_alfred["backfill:cursor:#{window}:message"] = cursor_value
 
       described_class.new.perform(nil, 'dry_run' => false)
@@ -211,7 +230,7 @@ RSpec.describe EvoFlow::BackfillContactEventsWorker, type: :worker do
       expect { described_class.new.perform(nil, 'dry_run' => false) }
         .to raise_error(EvoFlow::HTTPError)
 
-      window = (Time.current - 1.year).utc.strftime('%Y-%m-%d')
+      window = (1.year.ago).utc.strftime('%Y-%m-%d')
       expect(fake_alfred["backfill:cursor:#{window}:message"]).to eq(uuid(100))
     end
   end
@@ -342,7 +361,7 @@ RSpec.describe EvoFlow::BackfillContactEventsWorker, type: :worker do
       worker.perform(nil, 'dry_run' => true)
       from_date = worker.instance_variable_get(:@from_date)
 
-      expect(from_date).to be_within(5.seconds).of(Time.current - 1.year)
+      expect(from_date).to be_within(5.seconds).of(1.year.ago)
     end
 
     it 'parses an explicit ISO8601 from_date' do
@@ -376,8 +395,8 @@ RSpec.describe EvoFlow::BackfillContactEventsWorker, type: :worker do
       end.new
     end
 
-    it 'broadcasts with account_id + source + sanitized error' do
-      job = { 'args' => [nil, { 'source' => 'message' }], 'class' => described_class.name }
+    it 'broadcasts with account_id + sanitized error (no source field — M1)' do
+      job = { 'args' => [nil, {}], 'class' => described_class.name }
       exception = EvoFlow::HTTPError.new('boom', 500, nil)
 
       Wisper.subscribe(listener) do
@@ -385,7 +404,8 @@ RSpec.describe EvoFlow::BackfillContactEventsWorker, type: :worker do
       end
 
       expect(listener.received).to be_present
-      expect(listener.received[:data][:source]).to eq('message')
+      expect(listener.received[:data]).to include(:account_id, :error)
+      expect(listener.received[:data]).not_to include(:source)
       expect(listener.received[:data][:error]).to include('boom')
     end
   end

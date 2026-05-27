@@ -1,7 +1,8 @@
 module EvoFlow
   # Backfills historical contact_events into evo-flow's ClickHouse via the
-  # batch endpoint, so the contact-events timeline (EVO-1244) is populated
-  # for contacts that existed before the live publisher (EVO-1238) shipped.
+  # batch endpoint, so the contact-events timeline is populated for contacts
+  # that existed before the live publisher (EvoFlow::PublishEventWorker)
+  # shipped.
   #
   # retry: 2 (lower than PublishEventWorker's 5) because the worker is
   # resumable via a Redis cursor — a hard failure is preferable to long
@@ -23,8 +24,8 @@ module EvoFlow
     include Sidekiq::Worker
     sidekiq_options queue: :integrations, retry: 2
 
-    # Matches evo-flow's TrackBatchEventsDto internal BATCH_SIZE
-    # (src/modules/config/processing.config.ts:156) — keep in lockstep.
+    # Matches evo-flow's TrackBatchEventsDto internal BATCH_SIZE constant
+    # in src/modules/config/processing.config.ts — keep in lockstep.
     BATCH_SIZE = 100
     SCAN_BATCH_SIZE = 1000
     DEFAULT_FROM_DATE_LAG = 1.year
@@ -33,22 +34,24 @@ module EvoFlow
     sidekiq_retries_exhausted do |job, ex|
       args = job['args'] || []
       account_id = args[0]
-      opts = args[1] || {}
-      source = opts.is_a?(Hash) ? (opts['source'] || opts[:source] || '<unknown>') : '<unknown>'
       safe_error = EvoFlow::PublishEventWorker.sanitize_error(ex)
       Rails.logger.error(
-        "[EvoFlow][Backfill] terminal failure account_id=#{account_id || 'ALL'} " \
-        "source=#{source} msg=#{safe_error}"
+        "[EvoFlow][Backfill] terminal failure account_id=#{account_id || 'ALL'} msg=#{safe_error}"
       )
+      # `source` is intentionally omitted here — Sidekiq's exhaustion block
+      # has no live worker state, and threading it through job args added
+      # no signal (always '<unknown>'). broadcast_dropped still carries
+      # source where it is meaningful (F4 rescues).
       EvoFlow::BackfillFailureBroadcaster.new.broadcast_failed(
-        account_id: account_id, source: source, error: safe_error
+        account_id: account_id, error: safe_error
       )
     end
 
     def perform(account_id = nil, opts = {})
-      configure_run(account_id, opts)
+      @account_id = account_id
       return log_disabled unless EvoFlow.enabled?
 
+      configure_run(opts)
       run_source(:message, relation: messages_relation) { |msg| build_message_payload(msg) }
       run_source(:reporting_event, relation: reporting_events_relation) { |re| build_reporting_event_payload(re) }
     rescue EvoFlow::InvalidEventName => e
@@ -61,52 +64,41 @@ module EvoFlow
 
     private
 
-    def configure_run(account_id, opts)
+    def configure_run(opts)
       opts = (opts || {}).transform_keys(&:to_s)
-      @account_id = account_id
       @dry_run = opts.fetch('dry_run', true)
       @from_date = parse_from_date(opts['from_date'])
       @client = EvoFlow::Client.new unless @dry_run
-      @sample_logged = false
+      @sample_logged = Set.new
     end
 
     # find_each enforces its own primary-key ASC ordering. Passing
     # `start: cursor` (Rails 6+) is UUID-safe — it becomes the lower bound
     # on the PK, no manual where-clause comparison against the uuid column.
-    def run_source(source, relation:)
+    def run_source(source, relation:) # rubocop:disable Metrics/MethodLength
       cursor_key = cursor_key_for(source)
       cursor = Redis::Alfred.get(cursor_key).presence
+      find_each_opts = { batch_size: SCAN_BATCH_SIZE }
+      find_each_opts[:start] = cursor if cursor
+
       buffer = []
-      processed = process_records(relation, cursor) do |record|
-        accumulate(record, source: source, cursor_key: cursor_key, buffer: buffer) { yield(record) }
+      processed = 0
+      relation.find_each(**find_each_opts) do |record|
+        payload = yield(record)
+        if payload.nil?
+          increment_metric(:skipped, type: source)
+          next
+        end
+
+        log_sample(payload, source)
+        buffer << [record.id, payload]
+        processed += 1
+        flush(buffer, source: source, cursor_key: cursor_key) if buffer.size >= BATCH_SIZE
       end
 
       flush(buffer, source: source, cursor_key: cursor_key) if buffer.any?
       log_summary(source: source, count: processed)
       finalize_cursor(cursor_key)
-    end
-
-    def process_records(relation, cursor)
-      find_each_opts = { batch_size: SCAN_BATCH_SIZE }
-      find_each_opts[:start] = cursor if cursor
-      count = 0
-      relation.find_each(**find_each_opts) { |record| count += 1 if yield(record) }
-      count
-    end
-
-    # Returns true when the record contributed a payload (counted as processed),
-    # false when it was skipped — keeps the find_each loop body trivial.
-    def accumulate(record, source:, cursor_key:, buffer:)
-      payload = yield
-      if payload.nil?
-        increment_metric(:skipped, type: source)
-        return false
-      end
-
-      log_sample(payload)
-      buffer << [record.id, payload]
-      flush(buffer, source: source, cursor_key: cursor_key) if buffer.size >= BATCH_SIZE
-      true
     end
 
     def messages_relation
@@ -121,6 +113,10 @@ module EvoFlow
         .joins(:conversation)
     end
 
+    # Conversation enforces `validates :contact_id, presence: true` and
+    # belongs_to :contact is non-optional, so contact_id is normally never
+    # nil. Still guarded against raw INSERTs / migration backfills bypassing
+    # ActiveRecord validation.
     def build_message_payload(msg)
       conversation = msg.conversation
       return nil if conversation.nil? || conversation.contact_id.nil? || msg.created_at.nil?
@@ -199,9 +195,10 @@ module EvoFlow
       Redis::Alfred.delete(cursor_key)
     end
 
-    # Cursor key includes the YYYY-MM-DD of from_date so a re-run with a
-    # different window doesn't accidentally skip records covered by the
-    # earlier (more recent) cursor.
+    # Cursor key partitions by from_date at YYYY-MM-DD granularity — a
+    # re-run with a different *date* doesn't reuse a cursor that covered a
+    # narrower window. Two runs that differ only in sub-day hours WILL
+    # share a cursor (calendar-day partitioning is the common case).
     def cursor_key_for(source)
       window = @from_date.utc.strftime('%Y-%m-%d')
       base =
@@ -229,12 +226,14 @@ module EvoFlow
       )
     end
 
-    def log_sample(payload)
-      return if @sample_logged
+    # One sample line per source so debug output covers both Message and
+    # ReportingEvent payload shapes, not just the first one encountered.
+    def log_sample(payload, source)
+      return if @sample_logged.include?(source)
 
-      @sample_logged = true
+      @sample_logged << source
       sanitized = EvoFlow::PublishEventWorker.sanitize_payload(payload.transform_keys(&:to_s))
-      Rails.logger.info("[EvoFlow][Backfill] sample_payload=#{sanitized.inspect}")
+      Rails.logger.info("[EvoFlow][Backfill] sample_payload source=#{source} payload=#{sanitized.inspect}")
     end
 
     def log_dry_run_flush(source:, count:, cursor:)
