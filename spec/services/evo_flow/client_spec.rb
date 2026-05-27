@@ -166,6 +166,46 @@ RSpec.describe EvoFlow::Client do
     end
   end
 
+  describe '#post_batch' do
+    let(:batch_url) { "#{api_url}/events/batch" }
+    let(:events) do
+      [
+        { messageId: 'm-1', contactId: '42', event: 'conversation.activity', properties: {}, timestamp: '2026-01-01T00:00:00Z' },
+        { messageId: 'm-2', contactId: '43', event: 'conversation.activity', properties: {}, timestamp: '2026-01-01T00:00:01Z' }
+      ]
+    end
+
+    it 'POSTs {events: [...]} to /events/batch with auth + json headers' do
+      stub = stub_request(:post, batch_url)
+             .with(
+               body: { events: events }.to_json,
+               headers: {
+                 'X-Integration-API-Key' => api_key,
+                 'Content-Type' => 'application/json'
+               }
+             )
+             .to_return(status: 200, body: '{}')
+
+      client.post_batch(events)
+
+      expect(stub).to have_been_requested
+    end
+
+    it 'propagates EvoFlow::HTTPError from #post on non-2xx' do
+      stub_request(:post, batch_url).to_return(status: 500, body: 'boom')
+
+      expect { client.post_batch(events) }
+        .to raise_error(EvoFlow::HTTPError) { |error| expect(error.code).to eq(500) }
+    end
+
+    it 'propagates EvoFlow::HTTPError on transport failure (refused connection)' do
+      stub_request(:post, batch_url).to_raise(Errno::ECONNREFUSED)
+
+      expect { client.post_batch(events) }
+        .to raise_error(EvoFlow::HTTPError) { |error| expect(error.code).to be_nil }
+    end
+  end
+
   describe 'configuration safety' do
     it 'raises ConfigurationError when the API key is blank (F13)' do
       expect { described_class.new(api_url: api_url, api_key: '') }
