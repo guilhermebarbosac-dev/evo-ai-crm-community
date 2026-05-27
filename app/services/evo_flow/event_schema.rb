@@ -84,6 +84,31 @@ module EvoFlow
         resolved_by_id: :string, resolved_by_type: :string, resolution_time_seconds: :number
       }
     },
+    'conversation.activity' => {
+      category: :conversation,
+      required: { conversation_id: :uuid, source: :string },
+      optional: { inbox_id: :uuid, content: :string, activity_type: :string }
+    },
+    'conversation.first_reply' => {
+      category: :conversation,
+      required: { conversation_id: :uuid, source: :string },
+      optional: { inbox_id: :uuid, replied_at: :date, response_time_seconds: :number }
+    },
+    'conversation.reply_time' => {
+      category: :conversation,
+      required: { conversation_id: :uuid, source: :string },
+      optional: { inbox_id: :uuid, reply_time_seconds: :number, measured_at: :date }
+    },
+    'conversation.bot_handoff' => {
+      category: :conversation,
+      required: { conversation_id: :uuid, source: :string },
+      optional: { inbox_id: :uuid, handoff_at: :date, reason: :string }
+    },
+    'conversation.bot_resolved' => {
+      category: :conversation,
+      required: { conversation_id: :uuid, source: :string },
+      optional: { inbox_id: :uuid, resolved_at: :date }
+    },
     'message.created' => {
       category: :message,
       required: {
