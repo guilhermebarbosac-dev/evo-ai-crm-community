@@ -585,6 +585,7 @@ Rails.application.routes.draw do
             get :meta_app_options
             get :plan
             get :channels
+            get :available_channels
           end
         end
       end
