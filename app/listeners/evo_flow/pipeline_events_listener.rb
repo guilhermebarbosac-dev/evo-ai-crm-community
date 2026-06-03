@@ -13,6 +13,7 @@ module EvoFlow
   class PipelineEventsListener
     TRACK_PATH = '/events/track'
     EVENT_NAME = 'campaign.triggered'
+    STAGE_CHANGED_EVENT_NAME = 'pipeline.stage_changed'
 
     def pipeline_item_created(data)
       return if data.respond_to?(:data)
@@ -29,6 +30,28 @@ module EvoFlow
       return warn_unresolved(pipeline_item) unless contact_id
 
       enqueue_track(pipeline_item, contact_id)
+    rescue StandardError => e
+      log_failure(__method__, e)
+    end
+
+    def pipeline_stage_updated(data)
+      return if data.respond_to?(:data)
+
+      event_data = data[:data] || data
+      pipeline_item = event_data[:pipeline_item]
+      changed_attributes = event_data[:changed_attributes] || {}
+
+      unless pipeline_item
+        Rails.logger.error('EvoFlow::PipelineEventsListener#pipeline_stage_updated: pipeline_item is nil')
+        return
+      end
+      return unless changed_attributes['pipeline_stage_id'].is_a?(Array)
+      return unless evo_flow_enabled?
+
+      contact_id = resolve_contact_id(pipeline_item)
+      return warn_unresolved_stage_change(pipeline_item) unless contact_id
+
+      enqueue_stage_change_track(pipeline_item, contact_id, changed_attributes['pipeline_stage_id'])
     rescue StandardError => e
       log_failure(__method__, e)
     end
@@ -63,6 +86,62 @@ module EvoFlow
         "EvoFlow::PipelineEventsListener#pipeline_item_created: no resolvable contact_id for pipeline_item #{pipeline_item.id}"
       )
       nil
+    end
+
+    def warn_unresolved_stage_change(pipeline_item)
+      Rails.logger.warn(
+        "EvoFlow::PipelineEventsListener#pipeline_stage_updated: no resolvable contact_id for pipeline_item #{pipeline_item.id}"
+      )
+      nil
+    end
+
+    def enqueue_stage_change_track(pipeline_item, contact_id, stage_change)
+      old_stage_id, new_stage_id = stage_change
+      # Use the model's `updated_at` (set by AR on the save that triggered the
+      # stage change) instead of `Time.zone.now` so that the same logical
+      # event produces a deterministic `message_id` across listener
+      # invocations and Sidekiq retries — mirrors the pattern in
+      # `enqueue_track` which uses `pipeline_item.created_at`.
+      occurred_at = pipeline_item.updated_at || Time.zone.now
+      source_event_uuid = "#{pipeline_item.id}.#{new_stage_id}.#{occurred_at.to_i}"
+      message_id = EvoFlow::PayloadBuilder.message_id_for(STAGE_CHANGED_EVENT_NAME, contact_id, source_event_uuid)
+      payload = EvoFlow::PayloadBuilder.build_track(
+        event_name: STAGE_CHANGED_EVENT_NAME,
+        contact_id: contact_id,
+        properties: build_stage_changed_properties(pipeline_item, contact_id, old_stage_id, new_stage_id),
+        occurred_at: occurred_at,
+        message_id: message_id
+      )
+      EvoFlow::PublishEventWorker.perform_async(TRACK_PATH, JSON.parse(payload.to_json))
+    end
+
+    def build_stage_changed_properties(pipeline_item, contact_id, old_stage_id, new_stage_id)
+      new_stage = pipeline_item.pipeline_stage
+      old_stage = PipelineStage.find_by(id: old_stage_id) if old_stage_id
+      pipeline = new_stage&.pipeline
+
+      # `pipeline_stage_id`/`pipeline_stage_name` mirror `to_stage_id`/`to_stage_name`
+      # by design: schema treats `pipeline_stage_id` as required (matching the
+      # `campaign.triggered` convention) while journey trigger filters in the
+      # frontend use `to_stage_id`. Optional fields that resolve to nil are
+      # OMITTED rather than sent as null — `EventSchemaValidationPipe` rejects
+      # explicit `null` for typed fields (see EVO-1570 for the analogous bug
+      # on the EvoFlow backfill side).
+      properties = {
+        pipeline_item_id: pipeline_item.id,
+        pipeline_id: pipeline&.id,
+        pipeline_stage_id: new_stage_id,
+        to_stage_id: new_stage_id,
+        conversation_id: pipeline_item.conversation_id,
+        contact_id: contact_id,
+        source: 'pipeline_management'
+      }
+      properties[:pipeline_name] = pipeline.name if pipeline
+      properties[:pipeline_stage_name] = new_stage.name if new_stage
+      properties[:to_stage_name] = new_stage.name if new_stage
+      properties[:from_stage_id] = old_stage_id if old_stage_id
+      properties[:from_stage_name] = old_stage.name if old_stage
+      properties
     end
 
     # F11 fix: use the resolved contact_id for `contact_id` so deal items
