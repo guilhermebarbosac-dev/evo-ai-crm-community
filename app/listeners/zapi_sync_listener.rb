@@ -42,12 +42,19 @@ class ZapiSyncListener < BaseListener
 
   def zapi_channel?(inbox)
     is_whatsapp = inbox.channel_type == 'Channel::Whatsapp'
+
+    # `provider` só existe em Channel::Whatsapp. Para outros canais (Telegram,
+    # etc.) `inbox.channel.provider` levanta NoMethodError e derruba o
+    # EventDispatcherJob inteiro — por isso só lemos provider quando o canal
+    # for WhatsApp.
+    return false unless is_whatsapp
+
     provider = inbox.channel&.provider
     is_zapi = provider == 'zapi'
 
     Rails.logger.info "Z-API: Checking if channel is Z-API - channel_type: #{inbox.channel_type}, provider: #{provider}, is_whatsapp: #{is_whatsapp}, is_zapi: #{is_zapi}"
 
-    is_whatsapp && is_zapi
+    is_zapi
   end
 
   def sync_inbox_name_with_zapi(inbox)
