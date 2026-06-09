@@ -325,22 +325,11 @@ class AgentBots::TextSegmentationService
     result
   end
 
+  # Delegates to the shared AgentBots::MediaTypeDetector (single source of truth).
+  # Now also matches extensions followed by a query string / fragment
+  # (e.g. ".mp4?v=1"), which the previous anchored regex ($) missed.
   def determine_media_type(url)
-    url_lower = url.downcase
-
-    # Verifica extensões de imagem
-    return 'image' if url_lower.match?(/\.(jpg|jpeg|png|gif|bmp|webp|svg|tiff)$/i)
-
-    # Verifica extensões de áudio
-    return 'audio' if url_lower.match?(/\.(mp3|wav|ogg|m4a|aac|flac)$/i)
-
-    # Verifica extensões de vídeo
-    return 'video' if url_lower.match?(/\.(mp4|avi|mov|wmv|flv|mkv|webm)$/i)
-
-    # Verifica extensões de documento
-    return 'document' if url_lower.match?(/\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|rtf|odt)$/i)
-
-    'text'
+    AgentBots::MediaTypeDetector.detect(url)
   end
 
   def valid_segment?(segment)

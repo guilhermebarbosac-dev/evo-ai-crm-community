@@ -199,6 +199,16 @@ RSpec.describe AutomationRules::FlowExecutionService do
         expect(Messages::MessageBuilder).not_to receive(:new)
         flow_service.send(:execute_node_action, node)
       end
+
+      it 'logs a warning and skips when canned_response_id does not match any canned response (AC3 / EVO-1257)' do
+        nonexistent_id = SecureRandom.uuid
+        node = { 'type' => 'send-canned-response-node', 'id' => 'n1', 'data' => { 'canned_response_id' => nonexistent_id } }
+
+        expect(Rails.logger).to receive(:warn).with(/Canned response .* not found.*skipping send_canned_response/i)
+        expect(Messages::MessageBuilder).not_to receive(:new)
+
+        flow_service.send(:execute_node_action, node)
+      end
     end
 
     describe 'send-template-node' do
@@ -225,15 +235,17 @@ RSpec.describe AutomationRules::FlowExecutionService do
     end
 
     describe 'action_node? whitelist' do
-      it 'recognises all 18 node types (13 legacy + 5 new from EVO-1262)' do
-        new_types = %w[
+      it 'recognises all 19 node types (14 legacy + 5 new from EVO-1262)' do
+        # Added change-status-node (previously missing → silent no-op).
+        recognised = %w[
           assign-to-pipeline-node
           move-to-pipeline-stage-node
           create-pipeline-task-node
           send-canned-response-node
           send-template-node
+          change-status-node
         ]
-        new_types.each do |t|
+        recognised.each do |t|
           expect(flow_service.send(:action_node?, t)).to be(true), "expected #{t} to be a recognised action node"
         end
       end
@@ -270,6 +282,85 @@ RSpec.describe AutomationRules::FlowExecutionService do
 
       expect(conv_modal.reload.pipeline_items.count).to eq(conv_canvas.reload.pipeline_items.count)
       expect(conv_modal.pipeline_items.first.pipeline).to eq(conv_canvas.pipeline_items.first.pipeline)
+    end
+  end
+
+  # The flow executor now shares the canonical conversation actions
+  # with the modal ActionService, fixing the four documented divergences.
+  describe 'conversation action parity' do
+    let(:channel) { Channel::WebWidget.create!(website_url: 'https://test.example.com') }
+    let(:inbox) { Inbox.create!(name: 'Test Inbox', channel: channel) }
+    let(:contact_inbox) { ContactInbox.create!(inbox: inbox, contact: contact, source_id: SecureRandom.hex(4)) }
+    let(:conversation) { Conversation.create!(inbox: inbox, contact: contact, contact_inbox: contact_inbox) }
+    let(:flow_service) { described_class.new(rule, nil, conversation, contact) }
+
+    describe 'change-status-node (was a silent no-op)' do
+      it 'updates the conversation status' do
+        node = { 'type' => 'change-status-node', 'id' => 'n1', 'data' => { 'status' => 'resolved' } }
+        expect { flow_service.send(:execute_node_action, node) }
+          .to change { conversation.reload.status }.to('resolved')
+      end
+
+      it 'no-ops when status is missing' do
+        node = { 'type' => 'change-status-node', 'id' => 'n1', 'data' => {} }
+        expect { flow_service.send(:execute_node_action, node) }
+          .not_to change { conversation.reload.status }
+      end
+    end
+
+    describe 'send-transcript-node (was a logging stub)' do
+      it 'actually enqueues the transcript mail via ConversationReplyMailer' do
+        allow(flow_service).to receive(:parse_email_variables).and_return('ops@example.com')
+        delivery = double('delivery')
+        expect(delivery).to receive(:deliver_later)
+        with_proxy = double('with_proxy')
+        allow(ConversationReplyMailer).to receive(:with).with(account: nil).and_return(with_proxy)
+        allow(with_proxy).to receive(:conversation_transcript).and_return(delivery)
+
+        node = { 'type' => 'send-transcript-node', 'id' => 'n1', 'data' => { 'email' => 'ops@example.com' } }
+        flow_service.send(:execute_node_action, node)
+      end
+    end
+
+    describe 'assign-agent-node (inbox guard was missing)' do
+      let(:member) { User.create!(name: 'Member', email: "m-#{SecureRandom.hex(4)}@test.com") }
+      let(:outsider) { User.create!(name: 'Outsider', email: "o-#{SecureRandom.hex(4)}@test.com") }
+
+      before { InboxMember.create!(inbox: inbox, user: member) }
+
+      it 'assigns an agent who belongs to the inbox' do
+        node = { 'type' => 'assign-agent-node', 'id' => 'n1', 'data' => { 'agent_id' => member.id } }
+        flow_service.send(:execute_node_action, node)
+        expect(conversation.reload.assignee_id).to eq(member.id)
+      end
+
+      it 'does NOT assign an agent outside the inbox' do
+        node = { 'type' => 'assign-agent-node', 'id' => 'n1', 'data' => { 'agent_id' => outsider.id } }
+        flow_service.send(:execute_node_action, node)
+        expect(conversation.reload.assignee_id).to be_nil
+      end
+    end
+
+    describe 'send-webhook-node (event string unified)' do
+      it 'enqueues with the canonical automation_event.{event_name} string' do
+        allow(WebhookJob).to receive(:perform_later)
+        node = { 'type' => 'send-webhook-node', 'id' => 'n1', 'data' => { 'webhook_url' => 'https://example.com/hook' } }
+        flow_service.send(:execute_node_action, node)
+
+        expect(WebhookJob).to have_received(:perform_later).with(
+          'https://example.com/hook',
+          hash_including(event: "automation_event.#{rule.event_name}")
+        )
+      end
+    end
+  end
+
+  # AC8: a contact-triggered flow has no conversation; a conversation-
+  # bound node must degrade to a silent no-op instead of crashing on nil.
+  describe 'contact-only flow safety' do
+    it 'no-ops a conversation-bound node when there is no conversation' do
+      node = { 'type' => 'change-status-node', 'id' => 'n1', 'data' => { 'status' => 'resolved' } }
+      expect { service.send(:execute_node_action, node) }.not_to raise_error
     end
   end
 end

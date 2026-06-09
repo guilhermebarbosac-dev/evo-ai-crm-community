@@ -1,8 +1,10 @@
 class AutomationRules::FlowExecutionService
-  # EVO-1262: pipeline + message action implementations come from the shared
-  # modules so this canvas executor delegates to the same code paths as the
-  # modal AutomationRules::ActionService. See README.md in this directory for
-  # how to add a new node type.
+  # Every action implementation comes from the shared
+  # modules so this canvas executor runs the exact same code paths as the
+  # modal AutomationRules::ActionService — no standalone reimplementations,
+  # no silent divergence. This class only owns flow-control (walking nodes/
+  # edges) and the node_data → action_params normalisation. See README.md.
+  include AutomationRules::ConversationActionHandlers
   include AutomationRules::PipelineActionHandlers
   include AutomationRules::MessageActionHandlers
 
@@ -94,6 +96,7 @@ class AutomationRules::FlowExecutionService
       mute-conversation-node
       snooze-conversation-node
       resolve-conversation-node
+      change-status-node
       change-priority-node
       assign-to-pipeline-node
       move-to-pipeline-stage-node
@@ -105,6 +108,10 @@ class AutomationRules::FlowExecutionService
     action_node_types.include?(node_type)
   end
 
+  # Normalises each canvas node's `data` into the array/hash shape the shared
+  # action methods expect, then invokes the private method. Both executors
+  # therefore hit identical code paths in ConversationActionHandlers /
+  # PipelineActionHandlers / MessageActionHandlers.
   def execute_node_action(node)
     node_type = node['type']
     node_data = node['data'] || {}
@@ -130,11 +137,9 @@ class AutomationRules::FlowExecutionService
 
       when 'send-attachment-node'
         if node_data['attachment_ids']&.any?
-          attachment_params = {
-            attachment_ids: node_data['attachment_ids']
-          }
+          attachment_params = { attachment_ids: node_data['attachment_ids'] }
           attachment_params[:inbox_id] = node_data['inboxId'] if node_data['inboxId']
-          send_attachment([attachment_params])
+          send_attachment(attachment_params)
         end
 
       when 'send-webhook-node'
@@ -149,6 +154,11 @@ class AutomationRules::FlowExecutionService
       when 'resolve-conversation-node'
         resolve_conversation
 
+      # Change-status was missing from the whitelist + dispatch, so
+      # the node was a silent no-op. Wire it to the canonical change_status.
+      when 'change-status-node'
+        change_status([node_data['status']]) if node_data['status']
+
       when 'change-priority-node'
         change_priority([node_data['priority']]) if node_data['priority']
 
@@ -161,13 +171,13 @@ class AutomationRules::FlowExecutionService
         end
 
       when 'send-transcript-node'
+        # Canonical send_email_transcript expects a single comma-separated
+        # string it can split; normalise the array/scalar node payload here.
         email = node_data['email'] || node_data['emails']
-        send_email_transcript([email]) if email
+        send_email_transcript([Array(email).join(',')]) if email.present?
 
-      # EVO-1262: 5 new node types delegate to the shared modules. Node data
-      # is normalised to the {id: ...} shape that ActionService consumes so
-      # both executors hit identical code paths in PipelineActionHandlers /
-      # MessageActionHandlers — see README.md in this directory.
+      # EVO-1262: 5 node types delegate to the pipeline/message modules. Node
+      # data is normalised to the {id: ...} shape ActionService consumes.
       when 'assign-to-pipeline-node'
         pipeline_id = node_data['pipeline_id'] || node_data['id']
         assign_to_pipeline([{ id: pipeline_id }]) if pipeline_id
@@ -197,187 +207,5 @@ class AutomationRules::FlowExecutionService
       Rails.logger.error "Automation Rule #{@rule.id}: Node data: #{node_data.inspect}"
       EvolutionExceptionTracker.new(e).capture_exception
     end
-  end
-
-  # Override webhook method para context específico de flows
-  def send_webhook_event(webhook_url)
-    payload_data = @conversation ? @conversation.webhook_data : (@contact&.webhook_data || {})
-    payload = payload_data.merge(event: "automation_flow.#{@rule.event_name}")
-
-    # Sanitize the webhook URL to remove any leading/trailing whitespace or tabs
-    clean_url = webhook_url[0].to_s.strip
-    Rails.logger.info "Automation Rule #{@rule.id}: Sending webhook to #{clean_url}"
-    WebhookJob.perform_later(clean_url, payload)
-  end
-
-  # Implementações das ações básicas
-  def assign_agent(agent_ids)
-    return unless @conversation
-
-    agent_id = agent_ids.is_a?(Array) ? agent_ids.first : agent_ids
-    agent = User.find_by(id: agent_id)
-    return unless agent
-
-    @conversation.update!(assignee: agent)
-    Rails.logger.info "Automation Rule #{@rule.id}: Assigned conversation to agent #{agent.name}"
-  end
-
-  def assign_team(team_ids)
-    return unless @conversation
-
-    team_id = team_ids.is_a?(Array) ? team_ids.first : team_ids
-    team = Team.find_by(id: team_id)
-    return unless team
-
-    @conversation.update!(team: team)
-    Rails.logger.info "Automation Rule #{@rule.id}: Assigned conversation to team #{team.name}"
-  end
-
-  def add_label(label_ids)
-    labels = Label.where(id: label_ids)
-    return if labels.empty?
-
-    if @conversation
-      @conversation.label_list.add(labels.pluck(:title))
-      @conversation.save!
-      Rails.logger.info "Automation Rule #{@rule.id}: Added #{labels.count} labels to conversation"
-    elsif @contact
-      # Ensure Current.executed_by is set to prevent loop
-      Current.executed_by = @rule
-      # F-2: route through the setter so `saved_change_to_label_list?`
-      # dirty-tracks the change and Contact#publish_label_changes fires.
-      titles = labels.pluck(:title)
-      @contact.update!(label_list: (@contact.label_list + titles).uniq)
-      Rails.logger.info "Automation Rule #{@rule.id}: Added #{labels.count} labels to contact #{@contact.name}"
-    else
-      Rails.logger.warn "Automation Rule #{@rule.id}: No conversation or contact to add labels to"
-    end
-  end
-
-  def remove_label(label_ids)
-    labels = Label.where(id: label_ids)
-    return if labels.empty?
-
-    if @conversation
-      @conversation.label_list.remove(labels.pluck(:title))
-      @conversation.save!
-      Rails.logger.info "Automation Rule #{@rule.id}: Removed #{labels.count} labels from conversation"
-    elsif @contact
-      # Ensure Current.executed_by is set to prevent loop
-      Current.executed_by = @rule
-      # F-2: see add_label above — setter path dirties label_list.
-      titles = labels.pluck(:title)
-      @contact.update!(label_list: @contact.label_list - titles)
-      Rails.logger.info "Automation Rule #{@rule.id}: Removed #{labels.count} labels from contact #{@contact.name}"
-    else
-      Rails.logger.warn "Automation Rule #{@rule.id}: No conversation or contact to remove labels from"
-    end
-  end
-
-  def send_message(message_params)
-    return unless @conversation
-    return if conversation_a_tweet?
-
-    message = message_params.is_a?(Array) ? message_params.first : message_params
-    params = { content: message, private: false, content_attributes: { automation_rule_id: @rule.id } }
-
-    Messages::MessageBuilder.new(nil, @conversation, params).perform
-    Rails.logger.info "Automation Rule #{@rule.id}: Sent message to conversation"
-  end
-
-  def send_attachment(attachment_params)
-    return unless @conversation
-    return if conversation_a_tweet?
-
-    # attachment_params já vem no formato correto do node
-    attachment_data = attachment_params[0]
-
-    if attachment_data.is_a?(Hash)
-      blob_ids = attachment_data[:attachment_ids] || attachment_data['attachment_ids']
-      inbox_id = attachment_data[:inbox_id] || attachment_data['inbox_id']
-    else
-      blob_ids = attachment_data
-      inbox_id = nil
-    end
-
-    return unless @rule.files.attached?
-
-    blobs = ActiveStorage::Blob.where(id: blob_ids)
-    return if blobs.blank?
-
-    # Preparar parâmetros da mensagem
-    params = { content: nil, private: false, attachments: blobs }
-
-    # Validar inbox se especificado
-    if inbox_id
-      inbox = Inbox.find_by(id: inbox_id)
-      if inbox && @conversation.inbox != inbox
-        Rails.logger.warn "Automation Rule #{@rule.id}: Inbox mismatch. Conversation inbox: #{@conversation.inbox.id}, Requested inbox: #{inbox_id}"
-      end
-    end
-
-    Messages::MessageBuilder.new(nil, @conversation, params).perform
-    Rails.logger.info "Automation Rule #{@rule.id}: Sent attachment with #{blobs.size} files"
-  rescue StandardError => e
-    Rails.logger.error "Automation Rule #{@rule.id}: Error sending attachment: #{e.message}"
-    raise e
-  end
-
-  def mute_conversation
-    return unless @conversation
-
-    @conversation.mute!
-    Rails.logger.info "Automation Rule #{@rule.id}: Muted conversation"
-  end
-
-  def snooze_conversation
-    return unless @conversation
-
-    @conversation.snoozed!
-    Rails.logger.info "Automation Rule #{@rule.id}: Snoozed conversation"
-  end
-
-  def resolve_conversation
-    return unless @conversation
-
-    @conversation.resolved!
-    Rails.logger.info "Automation Rule #{@rule.id}: Resolved conversation"
-  end
-
-  def change_priority(priority_params)
-    return unless @conversation
-
-    priority = priority_params.is_a?(Array) ? priority_params.first : priority_params
-    @conversation.update!(priority: priority)
-    Rails.logger.info "Automation Rule #{@rule.id}: Changed priority to #{priority}"
-  end
-
-  def send_email_to_team(team_params)
-    return unless team_params.is_a?(Array) && team_params.first.is_a?(Hash)
-
-    data = team_params.first
-    team_ids = data[:team_ids] || data['team_ids']
-    message = data[:message] || data['message']
-
-    teams = Team.where(id: team_ids)
-    teams.each do |team|
-      TeamNotifications::AutomationNotificationMailer.conversation_creation(@conversation, team, message)&.deliver_now if @conversation
-    end
-
-    Rails.logger.info "Automation Rule #{@rule.id}: Sent email to #{teams.count} teams"
-  end
-
-  def send_email_transcript(email_params)
-    return unless @conversation
-
-    email = email_params.is_a?(Array) ? email_params.first : email_params
-    return if email.blank?
-
-    # Implementar envio de transcript por email se necessário
-    Rails.logger.info "Automation Rule #{@rule.id}: Email transcript requested for #{email}"
-  end
-
-  def conversation_a_tweet?
-    @conversation&.additional_attributes&.dig('type') == 'tweet'
   end
 end

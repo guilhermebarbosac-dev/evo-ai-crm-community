@@ -15,6 +15,9 @@ class AutomationRules::ConditionsFilterService < FilterService
     super([], nil)
     @rule = rule
     @conversation = conversation
+    # EVO-1642: contact-triggered rules with only-contact conditions run with
+    # no conversation in scope; the base relation falls back to the contact.
+    @contact = options[:contact]
 
     # setup filters from json file
     file = File.read('./lib/filters/filter_keys.yml')
@@ -124,11 +127,15 @@ class AutomationRules::ConditionsFilterService < FilterService
   # resolved) and Ruby's `Array.in?([])` is always false, so the rule never
   # fires.
   def scalar_transition_match?(filter, changed_attribute)
-    from_values = Array(filter['values']['from'])
-    to_values = Array(filter['values']['to'])
+    # EVO-1642: coerce both sides to String before comparing. Condition values
+    # are stored as strings (e.g. 'true'), but changed_attribute can carry the
+    # native type (e.g. boolean false for `blocked`), so `false.in?(['false'])`
+    # was silently never matching. Mirrors the Ruby contact evaluator.
+    from_values = Array(filter['values']['from']).map(&:to_s)
+    to_values = Array(filter['values']['to']).map(&:to_s)
 
-    from_match = from_values.empty? || changed_attribute[0].in?(from_values)
-    to_match = to_values.empty? || changed_attribute[1].in?(to_values)
+    from_match = from_values.empty? || changed_attribute[0].to_s.in?(from_values)
+    to_match = to_values.empty? || changed_attribute[1].to_s.in?(to_values)
 
     from_match && to_match
   end
@@ -203,17 +210,35 @@ class AutomationRules::ConditionsFilterService < FilterService
     end
 
     filter_operator_value = filter_operation(query_hash, current_index)
+    filter_operator = query_hash['filter_operator']
 
     case current_filter['attribute_type']
     when 'additional_attributes'
-      " contacts.additional_attributes ->> '#{attribute_key}' #{filter_operator_value} #{query_operator} "
+      column = "contacts.additional_attributes ->> '#{attribute_key}'"
+      " #{contact_predicate(column, filter_operator_value, filter_operator)} #{query_operator} "
     when 'standard'
       if attribute_key == 'labels'
         labels_query_fragment(query_hash, current_index, query_operator)
       else
-        " contacts.#{attribute_key} #{filter_operator_value} #{query_operator} "
+        " #{contact_predicate("contacts.#{attribute_key}", filter_operator_value, filter_operator)} #{query_operator} "
       end
     end
+  end
+
+  # EVO-1642: the retired Ruby contact evaluator treated a nil/absent value as
+  # SATISFYING the negative operators (`!values.include?(nil)` for not_equal_to,
+  # `none?` over `nil&.include?` for does_not_contain). SQL's `NULL NOT IN (...)`
+  # / `NULL NOT ILIKE ...` evaluate to NULL (row excluded), which silently
+  # stopped such rules from firing for contacts whose column is null. Make the
+  # negative operators NULL-inclusive on the contact path to preserve behaviour.
+  def contact_predicate(column, filter_operator_value, filter_operator)
+    predicate = "#{column} #{filter_operator_value}"
+    # Only on the contact-only path (no conversation) do we restore the retired
+    # Ruby evaluator's NULL-inclusive negatives. The conversation path keeps its
+    # existing SQL semantics so live conversation-rule behaviour is unchanged.
+    return predicate unless @conversation.nil? && %w[not_equal_to does_not_contain].include?(filter_operator)
+
+    "(#{predicate} OR #{column} IS NULL)"
   end
 
   def conversation_query_string(table_name, current_filter, query_hash, current_index)
@@ -260,23 +285,37 @@ class AutomationRules::ConditionsFilterService < FilterService
   # of conversation- and contact-level tags.
   def labels_query_fragment(query_hash, current_index, query_operator)
     filter_operator = query_hash[:filter_operator] || query_hash['filter_operator']
-    negate = filter_operator == 'not_equal_to'
+    # EVO-1642: is_present / is_not_present ask "does the record have ANY label"
+    # — there are no specific titles to match, so the `name IN (...)` clause is
+    # dropped. Without this they degraded to `IN (<empty>)` and never matched.
+    presence = %w[is_present is_not_present].include?(filter_operator)
+    negate = %w[not_equal_to is_not_present].include?(filter_operator)
 
     existence = negate ? 'NOT EXISTS' : 'EXISTS'
+
+    # EVO-1642: with a conversation the "label" is the union of conversation-
+    # and contact-level tags; for a contact-only rule (no conversation in the
+    # base relation) only the contact's own tags exist.
+    taggable_match =
+      if @conversation.present?
+        "(lbl_tg.taggable_type = 'Conversation' AND lbl_tg.taggable_id = conversations.id) " \
+          "OR (lbl_tg.taggable_type = 'Contact' AND lbl_tg.taggable_id = contacts.id)"
+      else
+        "lbl_tg.taggable_type = 'Contact' AND lbl_tg.taggable_id = contacts.id"
+      end
+
+    name_clause = presence ? '' : "AND lbl_t.name IN (:value_#{current_index})"
 
     subquery = <<~SQL.squish
       SELECT 1
         FROM taggings AS lbl_tg
         JOIN tags    AS lbl_t ON lbl_t.id = lbl_tg.tag_id
        WHERE lbl_tg.context = 'labels'
-         AND (
-              (lbl_tg.taggable_type = 'Conversation' AND lbl_tg.taggable_id = conversations.id)
-           OR (lbl_tg.taggable_type = 'Contact'      AND lbl_tg.taggable_id = contacts.id)
-         )
-         AND lbl_t.name IN (:value_#{current_index})
+         AND (#{taggable_match})
+         #{name_clause}
     SQL
 
-    @filter_values["value_#{current_index}"] = Array(query_hash['values'])
+    @filter_values["value_#{current_index}"] = Array(query_hash['values']) unless presence
 
     " #{existence} (#{subquery}) #{query_operator} "
   end
@@ -290,6 +329,12 @@ class AutomationRules::ConditionsFilterService < FilterService
   end
 
   def build_query_string(filters, query_hash, current_index)
+    # EVO-1642: some keys (e.g. country_code, labels) live in BOTH the
+    # conversations and contacts filter sections. With no conversation in the
+    # base relation, resolve them against contacts — otherwise the query would
+    # reference the absent `conversations` table and error out.
+    return contact_query_string(filters[:contact], query_hash.with_indifferent_access, current_index) if @conversation.nil? && filters[:contact]
+
     if filters[:conversation]
       conversation_query_string('conversations', filters[:conversation], query_hash.with_indifferent_access, current_index)
     elsif filters[:contact]
@@ -318,6 +363,16 @@ class AutomationRules::ConditionsFilterService < FilterService
   end
 
   def base_relation
+    # EVO-1642: contact-only rules (no conversation) match directly against the
+    # contact row. Only contacts.* columns and the labels EXISTS subquery are
+    # referenced for these rules (see rule_has_only_contact_conditions?), so no
+    # conversation/message/pipeline JOIN is needed.
+    # No conversation in scope -> contact-only rule. `@contact&.id` (rather than
+    # requiring @contact.present?) keeps a nil contact from falling through to
+    # `Conversation.where(id: @conversation.id)` and raising on nil — it yields
+    # an empty relation (no match) instead.
+    return Contact.where(id: @contact&.id) if @conversation.nil?
+
     records = Conversation.where(id: @conversation.id).joins(
       'LEFT OUTER JOIN contacts on conversations.contact_id = contacts.id'
     ).joins(

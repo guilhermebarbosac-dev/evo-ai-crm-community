@@ -19,10 +19,12 @@ class Api::V1::ConversationsController < Api::V1::BaseController
     archive: 'conversations.update',
     unarchive: 'conversations.update',
     transcript: 'conversations.export',
-    available_for_pipeline: 'conversations.read'
+    email_team: 'conversations.update',
+    available_for_pipeline: 'conversations.read',
+    unread_count: 'conversations.read'
   })
-  
-  before_action :conversation, except: [:index, :meta, :search, :create, :filter]
+
+  before_action :conversation, except: [:index, :meta, :search, :create, :filter, :unread_count]
   before_action :inbox, :contact, :contact_inbox, only: [:create]
 
   ATTACHMENT_RESULTS_PER_PAGE = 100
@@ -227,6 +229,25 @@ class Api::V1::ConversationsController < Api::V1::BaseController
     )
   end
 
+  def unread_count
+    accessible = Conversations::PermissionFilterService.new(
+      Conversation.all, Current.user
+    ).perform
+
+    incoming_type = Message.message_types[:incoming]
+    total = accessible
+            .joins(:messages)
+            .where(messages: { message_type: incoming_type })
+            .where('messages.created_at > COALESCE(conversations.agent_last_seen_at, to_timestamp(0))')
+            .distinct
+            .count('conversations.id')
+
+    success_response(
+      data: { unread_count: total },
+      message: 'Unread conversations count retrieved successfully'
+    )
+  end
+
   def mute
     @conversation.mute!
     success_response(
@@ -256,6 +277,26 @@ class Api::V1::ConversationsController < Api::V1::BaseController
     success_response(
       data: { email: params[:email] },
       message: 'Transcript email scheduled for delivery'
+    )
+  end
+
+  def email_team
+    if params[:team_ids].blank? || params[:message].blank?
+      return error_response(
+        ApiErrorCodes::VALIDATION_ERROR,
+        'team_ids and message are required',
+        status: :bad_request
+      )
+    end
+
+    teams = Team.where(id: params[:team_ids])
+    teams.each do |team|
+      TeamNotifications::AutomationNotificationMailer.conversation_creation(@conversation, team, params[:message])&.deliver_later
+    end
+
+    success_response(
+      data: { team_ids: teams.pluck(:id), message: params[:message] },
+      message: 'Team notification email scheduled for delivery'
     )
   end
 
@@ -377,22 +418,18 @@ class Api::V1::ConversationsController < Api::V1::BaseController
     quoted_ids = quoted_uuid_list(conversation_ids, connection)
     incoming_type = Message.message_types[:incoming]
 
-    # Count at most 10 unread messages per conversation using LATERAL to cap work per row.
     sql = <<~SQL.squish
-      SELECT c.id AS conversation_id, COUNT(m.id)::integer AS unread_count
+      SELECT c.id AS conversation_id,
+             (
+               SELECT COUNT(*)
+               FROM messages m
+               WHERE m.conversation_id = c.id
+                 AND m.message_type = #{incoming_type}
+                 AND m.created_at > COALESCE(c.agent_last_seen_at, to_timestamp(0))
+                 AND (m.content_attributes->>'read') IS DISTINCT FROM 'true'
+             )::integer AS unread_count
       FROM conversations c
-      LEFT JOIN LATERAL (
-        SELECT id
-        FROM messages
-        WHERE messages.conversation_id = c.id
-          AND messages.message_type = #{incoming_type}
-          AND messages.created_at > COALESCE(c.agent_last_seen_at, to_timestamp(0))
-          AND (messages.content_attributes->>'read') IS DISTINCT FROM 'true'
-        ORDER BY messages.created_at DESC
-        LIMIT 10
-      ) m ON TRUE
       WHERE c.id IN (#{quoted_ids})
-      GROUP BY c.id
     SQL
 
     connection.exec_query(sql).to_a.each_with_object({}) do |row, memo|

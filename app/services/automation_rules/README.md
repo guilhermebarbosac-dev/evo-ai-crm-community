@@ -15,10 +15,11 @@ This directory hosts two executor surfaces that share their action implementatio
 
 Both executors call the same Ruby methods for the cross-cutting actions:
 
+- `conversation_action_handlers.rb` (`AutomationRules::ConversationActionHandlers`) — the conversation-bound actions: `assign_agent` (with the `agent_belongs_to_inbox?` guard), `assign_team`, `add_label`/`remove_label` (conversation **or** contact), `change_status`, `change_priority`, `mute`/`snooze`/`resolve_conversation`, `send_message`, `send_attachment`, `send_email_to_team`, `send_email_transcript`, `send_webhook_event` (canonical `automation_event.{event_name}` string), plus helpers. Added to kill the flow-vs-simple divergence; included by the base `ActionService` (so the simple executor and `Macros::ExecutionService` reach it) and by `FlowExecutionService`.
 - `pipeline_action_handlers.rb` (`AutomationRules::PipelineActionHandlers`) — `assign_to_pipeline`, `update_pipeline_stage`, `create_pipeline_task`, helpers.
 - `message_action_handlers.rb` (`AutomationRules::MessageActionHandlers`) — `send_canned_response`, `send_template` (with `{{contact.field}}` / `{{conversation.field}}` resolution), helpers.
 
-Each module declares its methods `private`; when included into a class, they become private instance methods of that class. Both `ActionService` and `FlowExecutionService` include the modules; behaviour is identical between the two surfaces because the implementation is identical.
+Each module declares its methods `private`; when included into a class, they become private instance methods of that class. Both `ActionService` and `FlowExecutionService` include the modules; behaviour is identical between the two surfaces because the implementation is identical. `FlowExecutionService` owns only flow-control (walking nodes/edges) and the `node_data` → `action_params` normalisation — it holds **zero** action bodies.
 
 ## How to add a new node type
 
