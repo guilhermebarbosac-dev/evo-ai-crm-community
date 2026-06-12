@@ -2,9 +2,10 @@
 
 require 'rails_helper'
 
-# EVO-1231 [6.2]: global (channel-less) message-template CRUD exposed via the
-# existing per-inbox endpoints with the `?global=true` toggle.
-RSpec.describe 'Api::V1::Inboxes message templates (global mode)', type: :request do
+# EVO-1716: dedicated, account-scoped message-template CRUD at the flat
+# /api/v1/message_templates endpoint. Global (channel-less) when no inbox is
+# given; channel-bound when `inbox_id` is supplied. Meta sync stays inbox-scoped.
+RSpec.describe 'Api::V1::MessageTemplates', type: :request do
   let(:service_token) { 'spec-service-token' }
   let(:headers) { { 'X-Service-Token' => service_token } }
   let(:channel) { Channel::Api.create!(hmac_mandatory: false) }
@@ -21,9 +22,15 @@ RSpec.describe 'Api::V1::Inboxes message templates (global mode)', type: :reques
     JSON.parse(response.body)
   end
 
-  describe 'POST /api/v1/inboxes/:id/message_templates?global=true' do
+  def whatsapp_channel(provider = 'evolution')
+    ch = Channel::Whatsapp.new(provider: provider, phone_number: "+1555#{SecureRandom.hex(3)}")
+    ch.save!(validate: false)
+    ch
+  end
+
+  describe 'POST /api/v1/message_templates (global)' do
     it 'creates a channel-less template (AC1)' do
-      post "/api/v1/inboxes/#{inbox.id}/message_templates?global=true",
+      post '/api/v1/message_templates',
            params: { message_template: { name: "g-#{SecureRandom.hex(4)}", content: 'Hello' } },
            headers: headers, as: :json
 
@@ -33,128 +40,180 @@ RSpec.describe 'Api::V1::Inboxes message templates (global mode)', type: :reques
       expect(created.channel_type).to be_nil
     end
 
-    it 'rejects a WhatsApp Cloud template without a channel (AC5)' do
-      post "/api/v1/inboxes/#{inbox.id}/message_templates?global=true",
-           params: { message_template: { name: "wac-#{SecureRandom.hex(4)}", content: 'Hello', provider: 'whatsapp_cloud' } },
+    it 'rejects a WhatsApp Cloud template without a channel (AC1)' do
+      post '/api/v1/message_templates',
+           params: { message_template: { name: "wac-#{SecureRandom.hex(4)}", content: 'Hi', provider: 'whatsapp_cloud' } },
+           headers: headers, as: :json
+
+      expect(response).to have_http_status(:unprocessable_entity)
+    end
+
+    it 'returns 422 on a duplicate global name (AC5)' do
+      name = "dup-#{SecureRandom.hex(4)}"
+      MessageTemplate.create!(name: name, content: 'first')
+
+      post '/api/v1/message_templates',
+           params: { message_template: { name: name, content: 'second' } },
            headers: headers, as: :json
 
       expect(response).to have_http_status(:unprocessable_entity)
     end
   end
 
-  describe 'GET /api/v1/inboxes/:id/message_templates?global=true (AC2)' do
+  describe 'GET /api/v1/message_templates (global, AC1)' do
     it 'lists global templates' do
       template = MessageTemplate.create!(name: "g-#{SecureRandom.hex(4)}", content: 'Hi')
 
-      get "/api/v1/inboxes/#{inbox.id}/message_templates?global=true", headers: headers, as: :json
+      get '/api/v1/message_templates', headers: headers, as: :json
 
       expect(response).to have_http_status(:ok)
       expect(json_response['data'].map { |t| t['name'] }).to include(template.name)
     end
-  end
 
-  describe 'PUT /api/v1/inboxes/:id/message_templates/:template_id?global=true (AC3)' do
-    it 'updates a global template' do
-      template = MessageTemplate.create!(name: "g-#{SecureRandom.hex(4)}", content: 'Old')
-
-      put "/api/v1/inboxes/#{inbox.id}/message_templates/#{template.id}?global=true",
-          params: { message_template: { content: 'New' } },
-          headers: headers, as: :json
-
-      expect(response).to have_http_status(:ok)
-      expect(template.reload.content).to eq('New')
-    end
-  end
-
-  describe 'DELETE /api/v1/inboxes/:id/message_templates/:template_id?global=true (AC4)' do
-    it 'deletes a global template' do
-      template = MessageTemplate.create!(name: "g-#{SecureRandom.hex(4)}", content: 'Bye')
-
-      delete "/api/v1/inboxes/#{inbox.id}/message_templates/#{template.id}?global=true",
-             headers: headers, as: :json
-
-      expect(response).to have_http_status(:ok)
-      expect(MessageTemplate.exists?(template.id)).to be(false)
-    end
-  end
-
-  describe 'global scoping (excludes channel-bound and inactive templates)' do
-    def whatsapp_channel
-      ch = Channel::Whatsapp.new(provider: 'evolution', phone_number: "+1555#{SecureRandom.hex(3)}")
-      ch.save!(validate: false)
-      ch
-    end
-
-    it 'GET does not leak channel-bound templates' do
+    it 'does not leak channel-bound templates' do
       global = MessageTemplate.create!(name: "g-#{SecureRandom.hex(4)}", content: 'global')
       bound = MessageTemplate.create!(name: "b-#{SecureRandom.hex(4)}", content: 'bound', channel: whatsapp_channel)
 
-      get "/api/v1/inboxes/#{inbox.id}/message_templates?global=true", headers: headers, as: :json
+      get '/api/v1/message_templates', headers: headers, as: :json
 
       names = json_response['data'].map { |t| t['name'] }
       expect(names).to include(global.name)
       expect(names).not_to include(bound.name)
     end
 
-    it 'GET does not return inactive global templates' do
+    it 'does not return inactive global templates' do
       inactive = MessageTemplate.create!(name: "g-#{SecureRandom.hex(4)}", content: 'hidden', active: false)
 
-      get "/api/v1/inboxes/#{inbox.id}/message_templates?global=true", headers: headers, as: :json
+      get '/api/v1/message_templates', headers: headers, as: :json
 
       expect(json_response['data'].map { |t| t['name'] }).not_to include(inactive.name)
     end
+  end
 
-    it 'PUT cannot reach a channel-bound template' do
+  describe 'GET /api/v1/message_templates/:id (AC1)' do
+    it 'returns a single template' do
+      template = MessageTemplate.create!(name: "g-#{SecureRandom.hex(4)}", content: 'Hi')
+
+      get "/api/v1/message_templates/#{template.id}", headers: headers, as: :json
+
+      expect(response).to have_http_status(:ok)
+      expect(json_response['data']['id']).to eq(template.id)
+    end
+
+    it 'returns 404 for an unknown id' do
+      get "/api/v1/message_templates/#{SecureRandom.uuid}", headers: headers, as: :json
+
+      expect(response).to have_http_status(:not_found)
+    end
+  end
+
+  describe 'PUT /api/v1/message_templates/:id (global, AC1)' do
+    it 'updates a global template' do
+      template = MessageTemplate.create!(name: "g-#{SecureRandom.hex(4)}", content: 'Old')
+
+      put "/api/v1/message_templates/#{template.id}",
+          params: { message_template: { content: 'New' } },
+          headers: headers, as: :json
+
+      expect(response).to have_http_status(:ok)
+      expect(template.reload.content).to eq('New')
+    end
+
+    it 'cannot reach a channel-bound template' do
       bound = MessageTemplate.create!(name: "b-#{SecureRandom.hex(4)}", content: 'bound', channel: whatsapp_channel)
 
-      put "/api/v1/inboxes/#{inbox.id}/message_templates/#{bound.id}?global=true",
+      put "/api/v1/message_templates/#{bound.id}",
           params: { message_template: { content: 'hacked' } },
           headers: headers, as: :json
 
       expect(response).to have_http_status(:not_found)
       expect(bound.reload.content).to eq('bound')
     end
+  end
 
-    it 'DELETE cannot reach a channel-bound template' do
+  describe 'DELETE /api/v1/message_templates/:id (global, AC1)' do
+    it 'deletes a global template' do
+      template = MessageTemplate.create!(name: "g-#{SecureRandom.hex(4)}", content: 'Bye')
+
+      delete "/api/v1/message_templates/#{template.id}", headers: headers, as: :json
+
+      expect(response).to have_http_status(:ok)
+      expect(MessageTemplate.exists?(template.id)).to be(false)
+    end
+
+    it 'cannot reach a channel-bound template' do
       bound = MessageTemplate.create!(name: "b-#{SecureRandom.hex(4)}", content: 'bound', channel: whatsapp_channel)
 
-      delete "/api/v1/inboxes/#{inbox.id}/message_templates/#{bound.id}?global=true",
-             headers: headers, as: :json
+      delete "/api/v1/message_templates/#{bound.id}", headers: headers, as: :json
 
       expect(response).to have_http_status(:not_found)
       expect(MessageTemplate.exists?(bound.id)).to be(true)
     end
   end
 
-  describe 'permission enforcement (AC6)' do
+  describe 'channel-bound CRUD via inbox_id (AC2 / AC3)' do
+    it 'creates a template bound to the inbox channel' do
+      post '/api/v1/message_templates',
+           params: { inbox_id: inbox.id, message_template: { name: "b-#{SecureRandom.hex(4)}", content: 'bound' } },
+           headers: headers, as: :json
+
+      expect(response).to have_http_status(:created)
+      created = MessageTemplate.find(json_response['data']['id'])
+      expect(created.channel_id).to eq(channel.id)
+    end
+
+    it 'lists only that channel templates when filtered by inbox_id' do
+      global = MessageTemplate.create!(name: "g-#{SecureRandom.hex(4)}", content: 'global')
+      bound = MessageTemplate.create!(name: "b-#{SecureRandom.hex(4)}", content: 'bound', channel: channel)
+
+      get "/api/v1/message_templates?inbox_id=#{inbox.id}", headers: headers, as: :json
+
+      names = json_response['data'].map { |t| t['name'] }
+      expect(names).to include(bound.name)
+      expect(names).not_to include(global.name)
+    end
+
+    it 'lists the same set when filtered by channel_id' do
+      bound = MessageTemplate.create!(name: "b-#{SecureRandom.hex(4)}", content: 'bound', channel: channel)
+
+      get "/api/v1/message_templates?channel_id=#{channel.id}", headers: headers, as: :json
+
+      expect(json_response['data'].map { |t| t['name'] }).to include(bound.name)
+    end
+  end
+
+  describe 'authorization (AC4)' do
     let(:forbidden_user) { User.create!(name: 'No Perm', email: "noperm-#{SecureRandom.hex(4)}@example.com") }
 
     before do
-      # Authenticate as a user (not a service token) so the require_permissions
-      # gate evaluates the remote permission, which we deny.
-      allow_any_instance_of(Api::V1::InboxesController)
+      allow_any_instance_of(Api::V1::MessageTemplatesController)
         .to receive(:authenticate_request!) { Current.user = forbidden_user }
       allow_any_instance_of(EvoAuthService).to receive(:check_user_permission).and_return(false)
     end
 
-    it 'returns 403 when the user lacks inboxes.message_templates' do
-      get "/api/v1/inboxes/#{inbox.id}/message_templates?global=true", as: :json
+    it 'returns 403 when the user lacks message_templates.read' do
+      get '/api/v1/message_templates', as: :json
 
       expect(response).to have_http_status(:forbidden)
     end
   end
 
-  # EVO-1232 [6.3]: push a single template up to Meta (WhatsApp Cloud) for
-  # approval via POST .../message_templates/:template_id/sync_with_whatsapp_cloud.
-  describe 'POST /api/v1/inboxes/:id/message_templates/:template_id/sync_with_whatsapp_cloud' do
-    def whatsapp_cloud_channel
-      ch = Channel::Whatsapp.new(provider: 'whatsapp_cloud', phone_number: "+1555#{SecureRandom.hex(3)}")
-      ch.save!(validate: false)
-      ch
-    end
+  describe 'cutover: legacy inbox-nested CRUD routes are gone (AC7)' do
+    it 'no longer routes the old global GET/POST (404)' do
+      get "/api/v1/inboxes/#{inbox.id}/message_templates", headers: headers, as: :json
+      expect(response).to have_http_status(:not_found)
 
-    it 'enqueues the sync job and returns 202 for a WhatsApp Cloud template (AC4)' do
-      template = MessageTemplate.create!(name: "wac-#{SecureRandom.hex(4)}", content: 'Hi', channel: whatsapp_cloud_channel)
+      post "/api/v1/inboxes/#{inbox.id}/message_templates",
+           params: { message_template: { name: 'x', content: 'y' } }, headers: headers, as: :json
+      expect(response).to have_http_status(:not_found)
+    end
+  end
+
+  # EVO-1232 [6.3] — STAYS inbox-scoped (NOT moved by EVO-1716). Regression guard. (AC6)
+  describe 'POST /api/v1/inboxes/:id/message_templates/:template_id/sync_with_whatsapp_cloud' do
+    it 'enqueues the sync job and returns 202 for a WhatsApp Cloud template' do
+      template = MessageTemplate.create!(name: "wac-#{SecureRandom.hex(4)}", content: 'Hi',
+                                         channel: whatsapp_channel('whatsapp_cloud'))
 
       expect(SyncMessageTemplateWithWhatsappCloudJob).to receive(:perform_later).with(an_instance_of(MessageTemplate))
 
@@ -165,7 +224,7 @@ RSpec.describe 'Api::V1::Inboxes message templates (global mode)', type: :reques
       expect(json_response['data']['template']['id']).to eq(template.id)
     end
 
-    it 'returns 422 and does not enqueue for a channel-less template (AC5)' do
+    it 'returns 422 and does not enqueue for a channel-less template' do
       template = MessageTemplate.create!(name: "g-#{SecureRandom.hex(4)}", content: 'Hi')
 
       expect(SyncMessageTemplateWithWhatsappCloudJob).not_to receive(:perform_later)
@@ -176,28 +235,9 @@ RSpec.describe 'Api::V1::Inboxes message templates (global mode)', type: :reques
       expect(response).to have_http_status(:unprocessable_entity)
     end
 
-    it 'returns 422 for a template bound to a non-WhatsApp-Cloud channel (AC5)' do
-      bound = Channel::Whatsapp.new(provider: 'baileys', phone_number: "+1555#{SecureRandom.hex(3)}")
-      bound.save!(validate: false)
-      template = MessageTemplate.create!(name: "b-#{SecureRandom.hex(4)}", content: 'Hi', channel: bound)
-
-      expect(SyncMessageTemplateWithWhatsappCloudJob).not_to receive(:perform_later)
-
-      post "/api/v1/inboxes/#{inbox.id}/message_templates/#{template.id}/sync_with_whatsapp_cloud",
-           headers: headers, as: :json
-
-      expect(response).to have_http_status(:unprocessable_entity)
-    end
-
-    it 'returns 404 for an unknown template id' do
-      post "/api/v1/inboxes/#{inbox.id}/message_templates/#{SecureRandom.uuid}/sync_with_whatsapp_cloud",
-           headers: headers, as: :json
-
-      expect(response).to have_http_status(:not_found)
-    end
-
     it 'returns 403 without the inboxes.message_templates permission' do
-      template = MessageTemplate.create!(name: "wac-#{SecureRandom.hex(4)}", content: 'Hi', channel: whatsapp_cloud_channel)
+      template = MessageTemplate.create!(name: "wac-#{SecureRandom.hex(4)}", content: 'Hi',
+                                         channel: whatsapp_channel('whatsapp_cloud'))
       forbidden_user = User.create!(name: 'No Perm', email: "noperm-#{SecureRandom.hex(4)}@example.com")
       allow_any_instance_of(Api::V1::InboxesController)
         .to receive(:authenticate_request!) { Current.user = forbidden_user }

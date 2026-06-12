@@ -94,11 +94,9 @@ Rails.application.routes.draw do
         post :disconnect_channel_provider, on: :member
         post :sync_whatsapp_subscription, on: :member
         delete :avatar, on: :member
-        get :message_templates, on: :member
-        post :message_templates, on: :member
+        # Template CRUD moved to the dedicated flat /api/v1/message_templates
+        # endpoint (EVO-1716). Only the per-channel Meta sync stays inbox-scoped.
         post 'message_templates/sync', action: :sync_message_templates, on: :member
-        put 'message_templates/:template_id', action: :update_message_template, on: :member
-        delete 'message_templates/:template_id', action: :delete_message_template, on: :member
         post 'message_templates/:template_id/sync_with_whatsapp_cloud',
              action: :sync_template_with_whatsapp_cloud, on: :member
       end
@@ -158,6 +156,10 @@ Rails.application.routes.draw do
       end
 
       resources :canned_responses, only: [:index, :show, :create, :update, :destroy], controller: 'canned_responses'
+
+      # Dedicated, account-scoped message templates CRUD (global + channel-bound).
+      # Channel-bound ops pass inbox_id; Meta sync stays on the inbox routes. (EVO-1716)
+      resources :message_templates, only: [:index, :show, :create, :update, :destroy], controller: 'message_templates'
 
       resources :facebook_comment_moderations, only: [:index, :show], controller: 'facebook_comment_moderations' do
         member do
