@@ -105,11 +105,35 @@ module Whatsapp
       # doesn't expose it.
       def meta_bearer_token
         if MetaBaseUrl.enabled?
-          whatsapp_channel.provider_config.dig('evolution_hub', 'channel_token').presence ||
-            whatsapp_channel.provider_config['api_key']
+          hub_channel_token.presence || whatsapp_channel.provider_config['api_key']
         else
           whatsapp_channel.provider_config['api_key']
         end
+      end
+
+      # Returns the Hub channel_token used to authenticate against the Hub's
+      # /meta/* proxy. If the stored channel_token is blank (e.g. clobbered to
+      # nil by a nested-shape connect webhook), consult EvoHub via
+      # get_channel(channel_id) to recover the durable token, persist it back
+      # into provider_config (fetch-once, not per-send), and return it. Any
+      # failure falls through to nil so the caller can degrade gracefully.
+      def hub_channel_token
+        token = whatsapp_channel.provider_config.dig('evolution_hub', 'channel_token')
+        return token if token.present?
+
+        channel_id = whatsapp_channel.provider_config.dig('evolution_hub', 'channel_id')
+        return nil if channel_id.blank?
+
+        fetched = EvolutionHub::Client.new.get_channel(channel_id)['token']
+        if fetched.present?
+          cfg = whatsapp_channel.provider_config.deep_dup
+          (cfg['evolution_hub'] ||= {})['channel_token'] = fetched
+          whatsapp_channel.update_column(:provider_config, cfg)
+        end
+        fetched
+      rescue StandardError => e
+        Rails.logger.error("[WhatsappCloud] hub channel_token fetch failed: #{e.message}")
+        nil
       end
 
       def media_url(media_id)

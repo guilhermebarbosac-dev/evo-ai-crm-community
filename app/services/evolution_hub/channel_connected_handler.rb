@@ -75,8 +75,8 @@ module EvolutionHub
       provider_config['business_account_id'] = meta['waba_id'] if meta['waba_id'].present?
       hub_block = provider_config['evolution_hub'] || {}
       hub_block.merge!(
-        'channel_id'    => payload['channel_id'],
-        'channel_token' => payload['channel_token'],
+        'channel_id'    => payload['channel_id'].presence    || hub_block['channel_id'],
+        'channel_token' => payload['channel_token'].presence || hub_block['channel_token'],
         'status'        => 'active'
       )
       provider_config['evolution_hub'] = hub_block
