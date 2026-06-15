@@ -5,10 +5,11 @@ class Api::V1::CannedResponsesController < Api::V1::BaseController
     index: 'canned_responses.read',
     create: 'canned_responses.create',
     update: 'canned_responses.update',
-    destroy: 'canned_responses.delete'
+    destroy: 'canned_responses.delete',
+    destroy_attachment: 'canned_responses.update'
   })
 
-  before_action :fetch_canned_response, only: [:update, :destroy]
+  before_action :fetch_canned_response, only: [:update, :destroy, :destroy_attachment]
 
   def index
     @canned_responses = canned_responses
@@ -64,6 +65,15 @@ class Api::V1::CannedResponsesController < Api::V1::BaseController
     success_response(
       data: { id: @canned_response.id },
       message: 'Canned response deleted successfully'
+    )
+  end
+
+  def destroy_attachment
+    attachment = @canned_response.attachments.find(params[:id])
+    attachment.destroy!
+    success_response(
+      data: { id: attachment.id },
+      message: 'Attachment deleted successfully'
     )
   end
 

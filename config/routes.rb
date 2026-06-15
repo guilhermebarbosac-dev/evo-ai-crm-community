@@ -153,7 +153,11 @@ Rails.application.routes.draw do
         delete :avatar, on: :member
       end
 
-      resources :canned_responses, only: [:index, :create, :update, :destroy], controller: 'canned_responses'
+      resources :canned_responses, only: [:index, :create, :update, :destroy], controller: 'canned_responses' do
+          member do
+            delete 'attachments/:id', to: 'canned_responses#destroy_attachment', as: :destroy_attachment
+          end
+        end
 
       resources :facebook_comment_moderations, only: [:index, :show], controller: 'facebook_comment_moderations' do
         member do

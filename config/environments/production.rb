@@ -32,6 +32,8 @@ Rails.application.configure do
   # config.action_dispatch.x_sendfile_header = 'X-Sendfile' # for Apache
   # config.action_dispatch.x_sendfile_header = 'X-Accel-Redirect' # for NGINX
 
+  config.active_storage.resolve_model_to_route = :rails_storage_redirect
+
   # Store uploaded files on the local file system (see config/storage.yml for options)
   config.active_storage.service = begin
     GlobalConfigService.load('ACTIVE_STORAGE_SERVICE', ENV.fetch('ACTIVE_STORAGE_SERVICE', 'local'))
@@ -111,9 +113,7 @@ Rails.application.configure do
     raise "BACKEND_URL must be set to a public URL in production (got: #{backend_url_value.inspect})"
   end
 
-  Rails.application.routes.default_url_options = {
-    host: parsed_backend_url.host,
-    port: parsed_backend_url.port,
-    protocol: parsed_backend_url.scheme
-  }
+  url_opts = { host: parsed_backend_url.host, protocol: parsed_backend_url.scheme }
+  url_opts[:port] = parsed_backend_url.port if parsed_backend_url.port
+  Rails.application.routes.default_url_options = url_opts
 end
